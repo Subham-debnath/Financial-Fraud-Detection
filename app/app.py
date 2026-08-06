@@ -4,9 +4,9 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import joblib
-import glob
 from datetime import datetime
 from pathlib import Path
+
 BASE_DIR = Path(__file__).parent
 
 try:
@@ -43,7 +43,8 @@ LABEL_COLUMN_CANDIDATES = ["Class", "class", "Label", "label", "Actual", "actual
 COLORS = {
     "navy": "#0B1F3A", "navy_light": "#16314F", "accent": "#4F7CFF", "accent2": "#7C5CFF",
     "accent_soft": "#EAF0FF", "fraud": "#E5484D", "fraud_soft": "#FDEAEA",
-    "legit": "#1FA97A", "legit_soft": "#E8F8F1", "muted": "#64748B",
+    "legit": "#1FA97A", "legit_soft": "#E8F8F1", "amber": "#F5A623", "amber_soft": "#FFF4E0",
+    "muted": "#64748B",
 }
 FRAUD_MAP = {"Legitimate": COLORS["legit"], "Fraud": COLORS["fraud"]}
 
@@ -58,7 +59,8 @@ st.markdown(f"""
 html, body, [class*="css"] {{ font-family:'Inter',sans-serif; }}
 :root {{ --navy:{COLORS['navy']}; --accent:{COLORS['accent']}; --accent2:{COLORS['accent2']};
   --accent-soft:{COLORS['accent_soft']}; --fraud:{COLORS['fraud']}; --fraud-soft:{COLORS['fraud_soft']};
-  --legit:{COLORS['legit']}; --legit-soft:{COLORS['legit_soft']}; --muted:{COLORS['muted']}; }}
+  --legit:{COLORS['legit']}; --legit-soft:{COLORS['legit_soft']}; --amber:{COLORS['amber']};
+  --amber-soft:{COLORS['amber_soft']}; --muted:{COLORS['muted']}; }}
 
 .stApp {{ background: radial-gradient(1200px 600px at 10% -10%, #EEF3FF 0%, transparent 60%),
   radial-gradient(1000px 500px at 100% 0%, #F3FBF7 0%, transparent 55%), #F7F9FC; }}
@@ -73,6 +75,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{ backgro
 
 h1,h2,h3 {{ color:var(--navy); font-weight:800 !important; letter-spacing:-0.02em; }}
 
+/* Hero */
 .hero-banner {{ background: linear-gradient(120deg, var(--navy) 0%, #1E3A5F 55%, var(--accent) 140%);
   padding: 3rem 2.6rem; border-radius: 20px; color:white; margin-bottom: 1.8rem;
   box-shadow: 0 16px 40px rgba(11,31,58,0.28); position:relative; overflow:hidden; }}
@@ -80,36 +83,69 @@ h1,h2,h3 {{ color:var(--navy); font-weight:800 !important; letter-spacing:-0.02e
   background: radial-gradient(circle at 85% 20%, rgba(124,92,255,0.35), transparent 55%); }}
 .hero-banner h1 {{ color:white !important; font-size:2.5rem; margin-bottom:0.6rem; position:relative; }}
 .hero-banner p {{ color:#D6E2F5; font-size:1.05rem; max-width:640px; margin:0; position:relative; }}
-.hero-badge {{ display:inline-block; background:rgba(255,255,255,0.14); color:#EAF0FF; font-size:0.75rem;
-  font-weight:700; letter-spacing:0.06em; text-transform:uppercase; padding:0.3rem 0.8rem;
-  border-radius:999px; margin-bottom:1rem; position:relative; border:1px solid rgba(255,255,255,0.2); }}
+.hero-badge {{ display:inline-flex; align-items:center; gap:0.4rem; background:rgba(255,255,255,0.14);
+  color:#EAF0FF; font-size:0.75rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+  padding:0.3rem 0.8rem; border-radius:999px; margin-bottom:1rem; position:relative;
+  border:1px solid rgba(255,255,255,0.2); }}
+.live-dot {{ width:7px; height:7px; border-radius:50%; background:#3DDC97; box-shadow:0 0 0 rgba(61,220,151,0.6);
+  animation: pulseDot 1.8s infinite; display:inline-block; }}
+@keyframes pulseDot {{
+  0% {{ box-shadow:0 0 0 0 rgba(61,220,151,0.55); }}
+  70% {{ box-shadow:0 0 0 8px rgba(61,220,151,0); }}
+  100% {{ box-shadow:0 0 0 0 rgba(61,220,151,0); }}
+}}
 
+/* Cards */
 .feature-card, .glass-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.6rem;
   height:100%; box-shadow:0 4px 16px rgba(15,30,60,0.05); transition:transform .15s ease, box-shadow .15s ease; }}
 .feature-card:hover {{ transform:translateY(-4px); box-shadow:0 14px 28px rgba(15,30,60,0.12); border-color:#DCE6F7; }}
-.feature-card .icon {{ font-size:1.9rem; margin-bottom:0.5rem;
-  filter: drop-shadow(0 4px 8px rgba(79,124,255,0.25)); }}
+.feature-card .icon {{ font-size:1.9rem; margin-bottom:0.5rem; filter: drop-shadow(0 4px 8px rgba(79,124,255,0.25)); }}
 .feature-card h4 {{ margin:0 0 0.4rem 0; color:var(--navy); font-weight:700; }}
 .feature-card p {{ color:var(--muted); font-size:0.92rem; margin:0; }}
+
+/* Nav cards (dashboard home) */
+.nav-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.5rem 1.5rem 1.1rem 1.5rem;
+  box-shadow:0 4px 16px rgba(15,30,60,0.05); transition:transform .15s ease, box-shadow .15s ease;
+  margin-bottom:0.6rem; position:relative; overflow:hidden; }}
+.nav-card:hover {{ transform:translateY(-4px); box-shadow:0 16px 30px rgba(15,30,60,0.14); border-color:#DCE6F7; }}
+.nav-card .nav-icon {{ font-size:1.7rem; width:48px; height:48px; display:flex; align-items:center; justify-content:center;
+  background:var(--accent-soft); border-radius:12px; margin-bottom:0.8rem; }}
+.nav-card h4 {{ margin:0 0 0.3rem 0; color:var(--navy); font-weight:800; font-size:1.05rem; }}
+.nav-card p {{ color:var(--muted); font-size:0.88rem; margin:0 0 0.6rem 0; min-height:2.6rem; }}
+.nav-card .stButton>button {{ width:100%; background:var(--accent-soft) !important; color:var(--accent) !important;
+  box-shadow:none !important; font-weight:700 !important; }}
+.nav-card .stButton>button:hover {{ background:var(--accent) !important; color:white !important; transform:none; }}
 
 .section-pill {{ display:inline-block; background:var(--accent-soft); color:var(--accent); font-weight:700;
   font-size:0.75rem; letter-spacing:0.06em; text-transform:uppercase; padding:0.3rem 0.85rem;
   border-radius:999px; margin-bottom:0.6rem; }}
 
+/* KPI / metric cards with staggered entrance animation */
+@keyframes fadeSlideUp {{
+  from {{ opacity:0; transform:translateY(10px); }}
+  to {{ opacity:1; transform:translateY(0); }}
+}}
 .metric-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.3rem 1.5rem;
   box-shadow:0 4px 16px rgba(15,30,60,0.05); text-align:left; position:relative; overflow:hidden;
-  transition:transform .15s ease; }}
+  transition:transform .15s ease; animation: fadeSlideUp .5s ease both; }}
 .metric-card:hover {{ transform:translateY(-2px); }}
 .metric-card::before {{ content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent); }}
 .metric-card.fraud::before {{ background:var(--fraud); }}
 .metric-card.legit::before {{ background:var(--legit); }}
+.metric-card.alert {{ animation: fadeSlideUp .5s ease both, cardGlow 2.2s ease-in-out infinite; }}
+@keyframes cardGlow {{
+  0%, 100% {{ box-shadow:0 4px 16px rgba(15,30,60,0.05); }}
+  50% {{ box-shadow:0 4px 22px rgba(229,72,77,0.28); }}
+}}
 .metric-card .label {{ color:var(--muted); font-size:0.8rem; font-weight:700; text-transform:uppercase;
-  letter-spacing:0.04em; margin-bottom:0.4rem; }}
+  letter-spacing:0.04em; margin-bottom:0.4rem; display:flex; justify-content:space-between; align-items:center; }}
 .metric-card .value {{ font-size:2rem; font-weight:800; color:var(--navy); }}
 .metric-card.fraud .value {{ color:var(--fraud); }}
 .metric-card.legit .value {{ color:var(--legit); }}
 .metric-card.accent .value {{ color:var(--accent); }}
+.metric-card .delta {{ font-size:0.78rem; font-weight:600; color:var(--muted); margin-top:0.25rem; }}
 
+/* Buttons */
 .stButton>button, .stDownloadButton>button {{ background:linear-gradient(120deg,var(--navy),#173a63) !important;
   color:white !important; border-radius:10px !important; border:none !important; font-weight:600 !important;
   padding:0.55rem 1.3rem !important; transition:all .15s ease !important; box-shadow:0 4px 12px rgba(11,31,58,0.18); }}
@@ -117,47 +153,132 @@ h1,h2,h3 {{ color:var(--navy); font-weight:800 !important; letter-spacing:-0.02e
   background:linear-gradient(120deg,var(--accent),var(--accent2)) !important; transform:translateY(-1px);
   box-shadow:0 8px 18px rgba(79,124,255,0.3); }}
 
+/* Upload area */
+.upload-instructions {{ background:white; border:1px solid #EAEFF5; border-radius:14px; padding:1.1rem 1.4rem;
+  margin-bottom:0.9rem; box-shadow:0 2px 10px rgba(15,30,60,0.04); }}
+.upload-instructions .cols-chip {{ display:inline-block; background:var(--accent-soft); color:var(--accent);
+  font-family: 'JetBrains Mono', monospace; font-size:0.72rem; font-weight:700; padding:0.15rem 0.5rem;
+  border-radius:6px; margin:0.15rem 0.2rem 0.15rem 0; }}
+[data-testid="stFileUploaderDropzone"] {{ border-radius:14px; border:2px dashed #C7D3E6 !important; background:#FBFCFE; }}
+.file-chip-row {{ display:flex; gap:0.7rem; flex-wrap:wrap; margin:0.8rem 0 0.2rem 0; }}
+.file-chip {{ background:white; border:1px solid #EAEFF5; border-radius:12px; padding:0.6rem 1rem;
+  box-shadow:0 2px 8px rgba(15,30,60,0.04); font-size:0.82rem; color:var(--muted); }}
+.file-chip b {{ color:var(--navy); display:block; font-size:1rem; }}
+
 [data-testid="stDataFrame"] {{ border-radius:14px; overflow:hidden; border:1px solid #EAEFF5;
   box-shadow:0 2px 10px rgba(15,30,60,0.04); }}
-[data-testid="stFileUploaderDropzone"] {{ border-radius:14px; border:2px dashed #C7D3E6 !important; background:#FBFCFE; }}
 div[data-testid="stAlert"] {{ border-radius:12px; }}
 
-.result-banner {{ border-radius:16px; padding:1.5rem 1.7rem; font-weight:700; font-size:1.2rem; margin:0.8rem 0;
-  box-shadow:0 6px 20px rgba(15,30,60,0.06); }}
+/* Result banner (single transaction) */
+.result-banner {{ border-radius:16px; padding:1.5rem 1.7rem; margin:0.8rem 0; box-shadow:0 6px 20px rgba(15,30,60,0.06);
+  display:flex; align-items:center; gap:1rem; }}
+.result-banner .r-icon {{ font-size:2.2rem; }}
+.result-banner .r-title {{ font-weight:800; font-size:1.25rem; margin-bottom:0.15rem; }}
+.result-banner .r-sub {{ font-size:0.9rem; font-weight:500; opacity:0.85; }}
 .result-banner.fraud {{ background:var(--fraud-soft); color:var(--fraud); border:1px solid rgba(229,72,77,0.25); }}
 .result-banner.legit {{ background:var(--legit-soft); color:var(--legit); border:1px solid rgba(31,169,122,0.25); }}
+
+/* Filters panel */
+.filter-panel {{ background:white; border:1px solid #EAEFF5; border-radius:14px; padding:1rem 1.3rem 0.3rem 1.3rem;
+  margin-bottom:0.8rem; }}
+
+/* Footer */
+.app-footer {{ margin-top:2.5rem; padding:1.4rem 0 0.6rem 0; border-top:1px solid #E4E9F2;
+  display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; }}
+.app-footer .f-left {{ color:var(--muted); font-size:0.82rem; }}
+.app-footer .f-right {{ display:flex; gap:0.6rem; align-items:center; }}
+.app-footer .f-badge {{ background:var(--accent-soft); color:var(--accent); font-size:0.72rem; font-weight:700;
+  padding:0.25rem 0.6rem; border-radius:999px; }}
 hr {{ margin:1.4rem 0; }}
 </style>
 """, unsafe_allow_html=True)
 
 
-def metric_card(label, value, variant=""):
-    st.markdown(f'<div class="metric-card {variant}"><div class="label">{label}</div>'
-                f'<div class="value">{value}</div></div>', unsafe_allow_html=True)
+def metric_card(label, value, variant="", delay=0.0, badge=None, alert=False):
+    classes = f"metric-card {variant}{' alert' if alert else ''}"
+    badge_html = f'<span>{badge}</span>' if badge else ""
+    st.markdown(
+        f'<div class="{classes}" style="animation-delay:{delay}s">'
+        f'<div class="label"><span>{label}</span>{badge_html}</div>'
+        f'<div class="value">{value}</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def style_fig(fig, title=None, legend=True):
     """Apply consistent, professional theming to any Plotly figure."""
     fig.update_layout(
-        title=title or fig.layout.title.text,
+        title=title or (fig.layout.title.text if fig.layout.title else None),
         font=dict(family="Inter, sans-serif", color=COLORS["navy"]),
         title_font=dict(size=16, family="Inter, sans-serif"),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(t=55, l=10, r=10, b=10),
         legend=dict(orientation="h", y=-0.18) if legend else dict(),
         showlegend=legend,
+        hoverlabel=dict(bgcolor="white", font_family="Inter, sans-serif"),
+    )
+    fig.update_xaxes(gridcolor="#EEF1F6", zerolinecolor="#EEF1F6")
+    fig.update_yaxes(gridcolor="#EEF1F6", zerolinecolor="#EEF1F6")
+    return fig
+
+
+def make_gauge(value_pct, threshold_pct=50.0):
+    """Fraud-probability gauge with green/amber/red risk zones and a
+    threshold marker for the currently selected decision threshold."""
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value_pct,
+        number={"suffix": "%", "font": {"size": 34, "color": COLORS["navy"]}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": COLORS["muted"]},
+            "bar": {"color": COLORS["navy"], "thickness": 0.28},
+            "bgcolor": "white",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 40], "color": COLORS["legit_soft"]},
+                {"range": [40, 70], "color": COLORS["amber_soft"]},
+                {"range": [70, 100], "color": COLORS["fraud_soft"]},
+            ],
+            "threshold": {
+                "line": {"color": COLORS["fraud"], "width": 3},
+                "thickness": 0.85,
+                "value": threshold_pct,
+            },
+        },
+    ))
+    fig.update_layout(
+        height=250, margin=dict(t=30, b=10, l=25, r=25),
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", color=COLORS["navy"]),
     )
     return fig
+
+
+def footer():
+    st.markdown(f"""
+    <div class="app-footer">
+        <div class="f-left">💳 Financial Fraud Detection System · Built with Streamlit, scikit-learn &amp; Plotly ·
+        For educational / demo purposes — not a certified compliance tool.</div>
+        <div class="f-right">
+            <span class="f-badge"><span class="live-dot"></span>&nbsp; Model: {selected_model_path.split('/')[-1]}</span>
+            <span class="f-badge">v1.1</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def score_dataframe(model, X, threshold=0.5):
+    """Run predictions using predict_proba + an adjustable threshold when
+    available, falling back to the model's default predict() otherwise."""
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(X)[:, 1]
+        preds = (proba >= threshold).astype(int)
+        return preds, proba.round(4)
+    return model.predict(X), None
 
 
 # ============================================================
 # MODEL LOADING
 # ============================================================
-
-from pathlib import Path
-
-BASE_DIR = Path(__file__).parent
-
 @st.cache_resource
 def load_model(path):
     return joblib.load(path)
@@ -181,6 +302,12 @@ def get_model(path):
 # SESSION STATE
 # ============================================================
 st.session_state.setdefault("history", [])
+st.session_state.setdefault("nav", "🏠 Home")
+
+
+def go_to(target):
+    st.session_state["nav"] = target
+
 
 # ============================================================
 # SIDEBAR
@@ -189,14 +316,17 @@ st.sidebar.markdown("""
 <div style="text-align:center; padding:0.5rem 0 1.2rem 0;">
   <div style="font-size:2.2rem;">💳</div>
   <div style="font-size:1.15rem; font-weight:800; letter-spacing:-0.01em;">Fraud Detection</div>
-  <div style="font-size:0.8rem; color:#B7C6E0; margin-top:0.2rem;">ML-Powered Transaction Analysis</div>
+  <div style="font-size:0.8rem; color:#B7C6E0; margin-top:0.2rem;">
+    <span class="live-dot"></span>&nbsp; ML-Powered Transaction Analysis
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Navigate", [
+NAV_OPTIONS = [
     "🏠 Home", "📊 Upload & Predict", "🔎 Single Transaction",
     "🕒 Prediction History", "🧠 Model Info", "ℹ️ About",
-], label_visibility="collapsed")
+]
+page = st.sidebar.radio("Navigate", NAV_OPTIONS, key="nav", label_visibility="collapsed")
 
 available_models = discover_models()
 if len(available_models) > 1:
@@ -210,12 +340,12 @@ st.sidebar.markdown("---")
 st.sidebar.caption("Built with scikit-learn / XGBoost + Streamlit")
 
 # ============================================================
-# PAGE: HOME
+# PAGE: HOME (Dashboard)
 # ============================================================
 if page == "🏠 Home":
     st.markdown("""
     <div class="hero-banner">
-        <div class="hero-badge">Real-Time ML Scoring</div>
+        <div class="hero-badge"><span class="live-dot"></span> Real-Time ML Scoring</div>
         <h1>💳 Financial Fraud Detection</h1>
         <p>An end-to-end system that analyzes transaction data and flags potentially
         fraudulent activity in real time — powered by a trained classification model
@@ -223,20 +353,57 @@ if page == "🏠 Home":
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('<span class="section-pill">How it works</span>', unsafe_allow_html=True)
-    features = [
+    # ---- Session snapshot (animated KPIs) ----
+    hist = st.session_state.history
+    st.markdown('<span class="section-pill">Session Snapshot</span>', unsafe_allow_html=True)
+    if hist:
+        total_scored = sum(h["Total"] for h in hist)
+        total_fraud = sum(h["Fraud"] for h in hist)
+        runs = len(hist)
+        last_run = hist[-1]["Timestamp"]
+        overall_rate = (total_fraud / total_scored * 100) if total_scored else 0
+
+        k1, k2, k3, k4 = st.columns(4)
+        with k1:
+            metric_card("Transactions Scored", f"{total_scored:,}", "accent", delay=0.0)
+        with k2:
+            metric_card("Fraud Flagged", f"{total_fraud:,}", "fraud", delay=0.08, alert=total_fraud > 0)
+        with k3:
+            metric_card("Batches Run", f"{runs:,}", "legit", delay=0.16)
+        with k4:
+            metric_card("Overall Fraud Rate", f"{overall_rate:.2f}%", "accent", delay=0.24, badge=f"since {last_run.split(' ')[0]}")
+    else:
+        st.info("No predictions run yet this session — scores from **Upload & Predict** will summarize here.")
+
+    # ---- Navigation cards ----
+    st.markdown('<span class="section-pill">Jump In</span>', unsafe_allow_html=True)
+    nav_cards = [
+        ("📊", "Upload & Predict", "Score a batch of transactions from CSV with adjustable threshold and full analytics.", "📊 Upload & Predict"),
+        ("🔎", "Single Transaction", "Manually enter one transaction's features for an instant fraud check.", "🔎 Single Transaction"),
+        ("🕒", "Prediction History", "Review batches you've already scored this session.", "🕒 Prediction History"),
+        ("🧠", "Model Info", "See the algorithm and performance metrics behind the predictions.", "🧠 Model Info"),
+    ]
+    cols = st.columns(4)
+    for col, (icon, title, desc, target) in zip(cols, nav_cards):
+        with col:
+            st.markdown(
+                f'<div class="nav-card"><div class="nav-icon">{icon}</div>'
+                f'<h4>{title}</h4><p>{desc}</p></div>',
+                unsafe_allow_html=True,
+            )
+            st.button("Open →", key=f"navcard_{target}", on_click=go_to, args=(target,), use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<span class="section-pill">How It Works</span>', unsafe_allow_html=True)
+    steps = [
         ("📤", "Upload", "Upload a CSV of transactions and preview your data instantly."),
         ("🔍", "Predict", "Every transaction is scored with an adjustable fraud threshold."),
         ("📈", "Analyze", "Explore results, feature drivers, and evaluation metrics."),
-        ("⬇️", "Export", "Download the full results or just the flagged fraud cases."),
+        ("⬇️", "Export", "Download filtered, full, or fraud-only results."),
     ]
-    for col, (icon, title, desc) in zip(st.columns(4), features):
+    for col, (icon, title, desc) in zip(st.columns(4), steps):
         col.markdown(f'<div class="feature-card"><div class="icon">{icon}</div>'
                       f'<h4>{title}</h4><p>{desc}</p></div>', unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.info("👉 Head to **Upload & Predict** from the sidebar to get started, "
-            "or try **Single Transaction** to score one transaction by hand.")
 
 # ============================================================
 # PAGE: UPLOAD & PREDICT
@@ -260,15 +427,34 @@ elif page == "📊 Upload & Predict":
         st.info("This model doesn't expose probability scores, so the threshold slider is "
                 "unavailable — predictions use the model's default decision rule.")
 
-    uploaded_file = st.file_uploader("Upload Transaction CSV", type=["csv"])
+    st.markdown(
+        '<div class="upload-instructions">Required columns: '
+        + "".join(f'<span class="cols-chip">{c}</span>' for c in ["Time", "V1…V28", "Amount"])
+        + '<div style="margin-top:0.5rem; color:var(--muted); font-size:0.85rem;">'
+          'Optional label column (<code>Class</code>, <code>Label</code>, etc.) enables live '
+          'evaluation metrics below.</div></div>',
+        unsafe_allow_html=True,
+    )
+    uploaded_file = st.file_uploader("Upload Transaction CSV", type=["csv"], label_visibility="collapsed")
+
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
         except Exception as e:
             st.error(f"Could not read the CSV file: {e}"); st.stop()
 
-        st.markdown("#### Dataset Preview")
-        st.dataframe(df.head(), use_container_width=True)
+        size_kb = uploaded_file.size / 1024
+        st.markdown(
+            '<div class="file-chip-row">'
+            f'<div class="file-chip"><b>{uploaded_file.name}</b>File name</div>'
+            f'<div class="file-chip"><b>{len(df):,}</b>Rows</div>'
+            f'<div class="file-chip"><b>{len(df.columns)}</b>Columns</div>'
+            f'<div class="file-chip"><b>{size_kb:,.1f} KB</b>Size</div>'
+            '</div>', unsafe_allow_html=True
+        )
+
+        with st.expander("Dataset Preview", expanded=False):
+            st.dataframe(df.head(), use_container_width=True)
 
         missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
         if missing:
@@ -305,14 +491,15 @@ elif page == "📊 Upload & Predict":
         legit_count = total_count - fraud_count
         fraud_rate = (fraud_count / total_count * 100) if total_count else 0
 
-        for col, (label, val, variant) in zip(st.columns(4), [
-            ("Total Transactions", f"{total_count:,}", "accent"),
-            ("Fraud Transactions", f"{fraud_count:,}", "fraud"),
-            ("Legitimate Transactions", f"{legit_count:,}", "legit"),
-            ("Fraud Rate", f"{fraud_rate:.2f}%", "fraud"),
-        ]):
+        kpi_defs = [
+            ("Total Transactions", f"{total_count:,}", "accent", False),
+            ("Fraud Transactions", f"{fraud_count:,}", "fraud", fraud_count > 0),
+            ("Legitimate Transactions", f"{legit_count:,}", "legit", False),
+            ("Fraud Rate", f"{fraud_rate:.2f}%", "fraud", fraud_rate > 5),
+        ]
+        for i, (col, (label, val, variant, alert)) in enumerate(zip(st.columns(4), kpi_defs)):
             with col:
-                metric_card(label, val, variant)
+                metric_card(label, val, variant, delay=i * 0.08, alert=alert)
 
         if fraud_count == 0:
             st.success("No transactions were flagged as fraud at this threshold.")
@@ -325,13 +512,16 @@ elif page == "📊 Upload & Predict":
         c1, c2 = st.columns(2)
         with c1:
             fig = px.pie(names=["Legitimate", "Fraud"], values=[legit_count, fraud_count],
-                         color=["Legitimate", "Fraud"], color_discrete_map=FRAUD_MAP, hole=0.5)
+                         color=["Legitimate", "Fraud"], color_discrete_map=FRAUD_MAP, hole=0.55)
+            fig.update_traces(textinfo="percent+label", textfont_size=13)
+            fig.add_annotation(text=f"<b>{fraud_rate:.1f}%</b><br><span style='font-size:11px'>fraud</span>",
+                               showarrow=False, font=dict(size=18, color=COLORS["navy"]))
             st.plotly_chart(style_fig(fig, "Transaction Distribution"), use_container_width=True)
         with c2:
             fig = px.bar(x=["Legitimate", "Fraud"], y=[legit_count, fraud_count],
                          labels={"x": "Class", "y": "Count"}, color=["Legitimate", "Fraud"],
-                         color_discrete_map=FRAUD_MAP)
-            fig.update_traces(marker_line_width=0)
+                         color_discrete_map=FRAUD_MAP, text=[legit_count, fraud_count])
+            fig.update_traces(marker_line_width=0, textposition="outside")
             st.plotly_chart(style_fig(fig, "Transaction Counts", legend=False), use_container_width=True)
 
         c3, c4 = st.columns(2)
@@ -394,18 +584,40 @@ elif page == "📊 Upload & Predict":
             with st.expander("Classification report"):
                 st.code(classification_report(y_true, y_pred, target_names=["Legitimate", "Fraud"]))
 
-        # ---- Results table ----
+        # ---- Interactive filters + results table ----
         st.markdown("#### Prediction Results")
-        show_fraud_only = st.checkbox("Show fraud transactions only")
-        st.dataframe(df[df["Prediction"] == "Fraud"] if show_fraud_only else df, use_container_width=True)
+        with st.expander("🔧 Filters", expanded=False):
+            st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
+            f1, f2, f3 = st.columns(3)
+            pred_filter = f1.multiselect("Prediction", ["Legitimate", "Fraud"], default=["Legitimate", "Fraud"])
+            amt_min, amt_max = float(df["Amount"].min()), float(df["Amount"].max())
+            if amt_min == amt_max:
+                amount_range = (amt_min, amt_max)
+                f2.caption(f"Amount: {amt_min:,.2f} (constant)")
+            else:
+                amount_range = f2.slider("Amount range", amt_min, amt_max, (amt_min, amt_max))
+            if proba is not None:
+                prob_range = f3.slider("Fraud probability range", 0.0, 1.0, (0.0, 1.0), 0.01)
+            else:
+                prob_range = None
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        filtered_df = df[df["Prediction"].isin(pred_filter) & df["Amount"].between(*amount_range)]
+        if prob_range is not None:
+            filtered_df = filtered_df[filtered_df["Fraud_Probability"].between(*prob_range)]
+
+        st.caption(f"Showing {len(filtered_df):,} of {total_count:,} transactions")
+        st.dataframe(filtered_df, use_container_width=True)
 
         # ---- Downloads ----
         st.markdown("#### Download Results")
-        d1, d2 = st.columns(2)
-        d1.download_button("⬇️ Download Full Results", df.to_csv(index=False),
-                           file_name="predictions_full.csv", mime="text/csv")
-        d2.download_button("⬇️ Download Fraud-Only Results", df[df["Prediction"] == "Fraud"].to_csv(index=False),
-                           file_name="predictions_fraud_only.csv", mime="text/csv")
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("⬇️ Full Results", df.to_csv(index=False),
+                           file_name="predictions_full.csv", mime="text/csv", use_container_width=True)
+        d2.download_button("⬇️ Filtered View", filtered_df.to_csv(index=False),
+                           file_name="predictions_filtered.csv", mime="text/csv", use_container_width=True)
+        d3.download_button("⬇️ Fraud Only", df[df["Prediction"] == "Fraud"].to_csv(index=False),
+                           file_name="predictions_fraud_only.csv", mime="text/csv", use_container_width=True)
 
         st.session_state.history.append({
             "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "File": uploaded_file.name,
@@ -442,7 +654,7 @@ elif page == "🔎 Single Transaction":
         for i in range(1, 29):
             v_values[f"V{i}"] = v_cols[(i - 1) % 4].number_input(f"V{i}", value=0.0, step=0.1, key=f"v_{i}")
 
-        submitted = st.form_submit_button("Predict")
+        submitted = st.form_submit_button("Predict", use_container_width=True)
 
     if submitted:
         X_single = pd.DataFrame([{"Time": time_val, **v_values, "Amount": amount_val}])[REQUIRED_COLUMNS]
@@ -453,12 +665,26 @@ elif page == "🔎 Single Transaction":
                 st.error(f"Prediction failed: {e}"); st.stop()
 
         is_fraud = pred[0] == 1
-        label = "Fraud" if is_fraud else "Legitimate"
+        label = "Fraud Detected" if is_fraud else "Legitimate Transaction"
         variant = "fraud" if is_fraud else "legit"
         icon = "🚨" if is_fraud else "✅"
-        conf_text = f" (confidence: {proba[0]:.2%})" if proba is not None else ""
-        st.markdown(f'<div class="result-banner {variant}">{icon} Predicted: {label}{conf_text}</div>',
-                   unsafe_allow_html=True)
+        sub = "Recommend manual review or hold." if is_fraud else "No action needed at the current threshold."
+        conf_text = f" · confidence {proba[0]:.2%}" if proba is not None else ""
+
+        if proba is not None:
+            r1, r2 = st.columns([2, 1])
+        else:
+            r1, r2 = st.container(), None
+
+        with r1:
+            st.markdown(
+                f'<div class="result-banner {variant}"><div class="r-icon">{icon}</div>'
+                f'<div><div class="r-title">{label}{conf_text}</div><div class="r-sub">{sub}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+        if proba is not None and r2 is not None:
+            with r2:
+                st.plotly_chart(make_gauge(proba[0] * 100, threshold * 100), use_container_width=True)
 
         if SHAP_AVAILABLE and hasattr(model, "predict_proba"):
             try:
@@ -519,21 +745,23 @@ elif page == "🧠 Model Info":
         Precision, recall, and F1-score give a fuller picture of how well the model
         catches fraud without over-flagging legitimate transactions.</p></div>""", unsafe_allow_html=True)
 
-    st.markdown("<br>#### Performance Metrics", unsafe_allow_html=True)
-    for col, (label, key, variant) in zip(st.columns(4), [
+    st.markdown("#### Performance Metrics")
+    perf_defs = [
         ("Accuracy", "accuracy", "accent"), ("Precision", "precision", "legit"),
         ("Recall", "recall", "legit"), ("F1-Score", "f1_score", "accent"),
-    ]):
+    ]
+    for i, (col, (label, key, variant)) in enumerate(zip(st.columns(4), perf_defs)):
         with col:
-            metric_card(label, f"{MODEL_INFO[key] * 100:.2f}%", variant)
+            metric_card(label, f"{MODEL_INFO[key] * 100:.2f}%", variant, delay=i * 0.08)
 
     st.markdown("<br>", unsafe_allow_html=True)
     fig = px.bar(x=["Accuracy", "Precision", "Recall", "F1-Score"],
                 y=[MODEL_INFO[k] for k in ["accuracy", "precision", "recall", "f1_score"]],
                 labels={"x": "Metric", "y": "Score"}, range_y=[0, 1],
                 color=["Accuracy", "Precision", "Recall", "F1-Score"],
-                color_discrete_sequence=[COLORS["accent"], COLORS["legit"], COLORS["legit"], COLORS["accent"]])
-    fig.update_traces(marker_line_width=0)
+                color_discrete_sequence=[COLORS["accent"], COLORS["legit"], COLORS["legit"], COLORS["accent"]],
+                text=[f"{MODEL_INFO[k]*100:.1f}%" for k in ["accuracy", "precision", "recall", "f1_score"]])
+    fig.update_traces(marker_line_width=0, textposition="outside")
     st.plotly_chart(style_fig(fig, "Model Performance Overview", legend=False), use_container_width=True)
 
     st.info("⚠️ These values are placeholders — update `MODEL_INFO` at the top of the script with your "
@@ -575,3 +803,8 @@ This app expects `Time`, `V1`–`V28`, and `Amount` columns (the Kaggle Credit C
 format). If your trained model instead uses the PaySim dataset's raw columns (`step`, `type`,
 `amount`, `oldbalanceOrg`, etc.), update `REQUIRED_COLUMNS` and the single-transaction form accordingly.
 """)
+
+# ============================================================
+# FOOTER (all pages)
+# ============================================================
+footer()
