@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 import joblib
 import glob
 from datetime import datetime
+from pathlib import Path
+BASE_DIR = Path(__file__).parent
 
 try:
     from sklearn.metrics import (
@@ -151,30 +153,28 @@ def style_fig(fig, title=None, legend=True):
 # ============================================================
 # MODEL LOADING
 # ============================================================
+
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+
 @st.cache_resource
 def load_model(path):
     return joblib.load(path)
 
 
 def discover_models():
-    found = sorted(glob.glob("*.pkl"))
-    return found if found else ["model.pkl"]
+    found = sorted(BASE_DIR.glob("*.pkl"))
+    return [str(f) for f in found] if found else [str(BASE_DIR / "model.pkl")]
 
 
 def get_model(path):
     try:
         return load_model(path), None
     except FileNotFoundError:
-        return None, f"`{path}` not found. Please add the trained model file to the app directory."
+        return None, f"{path} not found."
     except Exception as e:
         return None, f"Failed to load model: {e}"
-
-
-def score_dataframe(model, X, threshold):
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X)[:, 1]
-        return (proba >= threshold).astype(int), proba.round(4)
-    return model.predict(X), None
 
 
 # ============================================================
