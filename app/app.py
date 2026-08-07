@@ -57,6 +57,13 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 html, body, [class*="css"] {{ font-family:'Inter',sans-serif; }}
+html {{ color-scheme: light; }}
+/* Low-specificity reset so plain Streamlit text stays readable even if a
+   visitor's browser/OS is set to dark mode. Any element with its own class
+   (hero-banner, feature-card, metric-card, sidebar, etc.) already sets its
+   own color with higher specificity and overrides this automatically. */
+p, li, span, div, label, small, td, th {{ color:{COLORS['navy']}; }}
+
 :root {{ --navy:{COLORS['navy']}; --accent:{COLORS['accent']}; --accent2:{COLORS['accent2']};
   --accent-soft:{COLORS['accent_soft']}; --fraud:{COLORS['fraud']}; --fraud-soft:{COLORS['fraud_soft']};
   --legit:{COLORS['legit']}; --legit-soft:{COLORS['legit_soft']}; --amber:{COLORS['amber']};
@@ -554,7 +561,7 @@ elif page == "📊 Upload & Predict":
 
             e1, e2 = st.columns(2)
             with e1:
-                cm = confusion_matrix(y_true, y_pred)
+                cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
                 fig = px.imshow(cm, text_auto=True, x=["Predicted Legitimate", "Predicted Fraud"],
                                 y=["Actual Legitimate", "Actual Fraud"], color_continuous_scale="Blues")
                 st.plotly_chart(style_fig(fig, "Confusion Matrix", legend=False), use_container_width=True)
