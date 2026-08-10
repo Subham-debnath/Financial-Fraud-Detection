@@ -63,7 +63,6 @@ html {{ color-scheme: light; }}
    (hero-banner, feature-card, metric-card, sidebar, etc.) already sets its
    own color with higher specificity and overrides this automatically. */
 p, li, span, div, label, small, td, th {{ color:{COLORS['navy']}; }}
-
 :root {{ --navy:{COLORS['navy']}; --accent:{COLORS['accent']}; --accent2:{COLORS['accent2']};
   --accent-soft:{COLORS['accent_soft']}; --fraud:{COLORS['fraud']}; --fraud-soft:{COLORS['fraud_soft']};
   --legit:{COLORS['legit']}; --legit-soft:{COLORS['legit_soft']}; --amber:{COLORS['amber']};
@@ -558,6 +557,14 @@ elif page == "📊 Upload & Predict":
             st.caption(f"Detected a label column (`{label_col}`) — comparing predictions against it.")
             y_true = df[label_col].astype(int)
             y_pred = (df["Prediction"] == "Fraud").astype(int)
+            single_class_sample = y_true.nunique() < 2
+
+            if single_class_sample:
+                st.warning(f"This sample only contains one class (`{label_col}` is all "
+                           f"{'fraud' if y_true.iloc[0] == 1 else 'legitimate'}) — the confusion "
+                           "matrix below will still show it, but ROC/PR curves and AUC aren't "
+                           "meaningful without both classes present. Upload a larger, mixed sample "
+                           "for a real evaluation.")
 
             e1, e2 = st.columns(2)
             with e1:
@@ -566,7 +573,7 @@ elif page == "📊 Upload & Predict":
                                 y=["Actual Legitimate", "Actual Fraud"], color_continuous_scale="Blues")
                 st.plotly_chart(style_fig(fig, "Confusion Matrix", legend=False), use_container_width=True)
             with e2:
-                if proba is not None:
+                if proba is not None and not single_class_sample:
                     fpr, tpr, _ = roc_curve(y_true, proba)
                     roc_auc = auc(fpr, tpr)
                     fig = go.Figure([
@@ -577,10 +584,12 @@ elif page == "📊 Upload & Predict":
                     ])
                     fig.update_layout(xaxis_title="False Positive Rate", yaxis_title="True Positive Rate")
                     st.plotly_chart(style_fig(fig, "ROC Curve"), use_container_width=True)
-                else:
+                elif proba is None:
                     st.info("ROC curve requires probability scores, which this model doesn't provide.")
+                else:
+                    st.info("ROC curve needs both classes present in the sample.")
 
-            if proba is not None:
+            if proba is not None and not single_class_sample:
                 prec, rec, _ = precision_recall_curve(y_true, proba)
                 ap = average_precision_score(y_true, proba)
                 fig = go.Figure(go.Scatter(x=rec, y=prec, mode="lines", name=f"PR (AP = {ap:.3f})",
@@ -589,7 +598,7 @@ elif page == "📊 Upload & Predict":
                 st.plotly_chart(style_fig(fig, "Precision-Recall Curve"), use_container_width=True)
 
             with st.expander("Classification report"):
-                st.code(classification_report(y_true, y_pred, target_names=["Legitimate", "Fraud"]))
+                st.code(classification_report(y_true, y_pred, labels=[0, 1], target_names=["Legitimate", "Fraud"], zero_division=0))
 
         # ---- Interactive filters + results table ----
         st.markdown("#### Prediction Results")
