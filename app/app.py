@@ -6,821 +6,341 @@ import plotly.graph_objects as go
 import joblib
 from datetime import datetime
 from pathlib import Path
+"""Optional model diagnostics for the fraud investigation application."""
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+LABELS = ["Class", "class", "Label", "label", "Actual", "actual", "is_fraud", "isFraud"]
+
+
+def render_importance(model, features):
+    """Display global importance only when it matches the expected features."""
+    values = getattr(model, "feature_importances_", None)
+    if values is None:
+        st.info("Global feature importance is unavailable for this model.")
+        return
+    if len(values) != len(features):
+        st.info("Feature importance does not match the expected input columns.")
+        return
+    data = pd.DataFrame({"Feature": features, "Importance": values}).nlargest(10, "Importance").sort_values("Importance")
+    fig = px.bar(data, x="Importance", y="Feature", orientation="h", color_discrete_sequence=["#4868e8"])
+    fig.update_layout(height=360, margin=dict(l=5, r=10, t=10, b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Global model importance describes the model overall, not the reason for an individual prediction.")
+
+
+def render_explanation(model, X):
+    """Try a SHAP tree explanation for a single transaction."""
+    try:
+        import shap
+    except ImportError:
+        st.info("Install the optional shap package to see an explanation for this transaction.")
+        return
+    try:
+        if len(X) != 1:
+            raise ValueError("Select exactly one transaction.")
+        raw = shap.TreeExplainer(model).shap_values(X)
+        classes = list(getattr(model, "classes_", [0, 1]))
+        fraud_index = classes.index(1) if 1 in classes else None
+        if isinstance(raw, list):
+            if fraud_index is None:
+                raise ValueError("Fraud class 1 not found.")
+            values = np.asarray(raw[fraud_index])[0]
+        else:
+            array = np.asarray(raw)
+            if array.ndim == 3:
+                if fraud_index is None:
+                    raise ValueError("Fraud class 1 not found.")
+                if array.shape[1] == X.shape[1]:
+                    values = array[0, :, fraud_index]
+                elif array.shape[2] == X.shape[1]:
+                    values = array[fraud_index, 0, :]
+                else:
+                    raise ValueError("Unsupported explanation shape.")
+            elif array.ndim == 2:
+                values = array[0]
+            else:
+                raise ValueError("Unsupported explanation shape.")
+        if len(values) != X.shape[1] or not np.isfinite(values).all():
+            raise ValueError("Explanation does not match the input features.")
+        data = pd.DataFrame({"Feature": X.columns, "Contribution": values})
+        data = data.iloc[np.argsort(np.abs(data["Contribution"].to_numpy()))[-10:]]
+        data["Direction"] = np.where(data["Contribution"] >= 0, "Increases score", "Decreases score")
+        fig = px.bar(data, x="Contribution", y="Feature", color="Direction", orientation="h", color_discrete_map={"Increases score": "#e45b61", "Decreases score": "#16a085"})
+        fig.update_layout(height=360, margin=dict(l=5, r=10, t=10, b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", legend_title_text="")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("SHAP contributions describe the model output relative to its baseline; transformed V features are not directly interpretable as transaction attributes.")
+    except Exception as exc:
+        st.info(f"A per-transaction explanation is unavailable for this model: {exc}")
+
+
+def render_evaluation(df):
+    """Evaluate predictions only when a valid 0/1 ground-truth column exists."""
+    label = next((name for name in LABELS if name in df.columns), None)
+    if label is None:
+        st.info("Add a 0/1 ground-truth label column to the CSV to evaluate predictions.")
+        return
+    try:
+        from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score, classification_report
+        actual = pd.to_numeric(df[label], errors="coerce")
+        if actual.isna().any() or not actual.isin([0, 1]).all():
+            st.warning(f"Column {label!r} must contain only 0 and 1, with no missing values.")
+            return
+        if not df["Prediction"].isin(["Fraud", "Legitimate"]).all():
+            st.warning("Predictions must be labelled Fraud or Legitimate for evaluation.")
+            return
+        y = actual.astype(int).to_numpy()
+        predicted = (df["Prediction"] == "Fraud").astype(int).to_numpy()
+        matrix = confusion_matrix(y, predicted, labels=[0, 1])
+        st.caption(f"Ground truth: {label}. Metrics describe this uploaded dataset at the selected threshold.")
+        fig = go.Figure(data=go.Heatmap(z=matrix, x=["Predicted legitimate", "Predicted fraud"], y=["Actual legitimate", "Actual fraud"], colorscale="Blues", showscale=False, text=matrix, hovertemplate="%{y}<br>%{x}<br>Count: %{z}<extra></extra>"))
+        for i in range(2):
+            for j in range(2):
+                fig.add_annotation(x=j, y=i, text=str(matrix[i, j]), showarrow=False, font=dict(color="#15243b", size=18))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), yaxis_autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
+        st.text(classification_report(y, predicted, labels=[0, 1], target_names=["Legitimate", "Fraud"], zero_division=0))
+        if len(np.unique(y)) < 2:
+            st.info("ROC and precision-recall curves require both classes in the uploaded labels.")
+            return
+        if "Fraud_Probability" not in df:
+            st.info("Probability scores are unavailable; ROC and precision-recall curves cannot be computed.")
+            return
+        scores = pd.to_numeric(df["Fraud_Probability"], errors="coerce").to_numpy()
+        if not np.isfinite(scores).all() or ((scores < 0) | (scores > 1)).any():
+            st.warning("Fraud scores must be finite values between 0 and 1.")
+            return
+        fpr, tpr, _ = roc_curve(y, scores)
+        precision, recall, _ = precision_recall_curve(y, scores)
+        left, right = st.columns(2)
+        with left:
+            fig = go.Figure(go.Scatter(x=fpr, y=tpr, mode="lines", name=f"AUC {auc(fpr,tpr):.3f}"))
+            fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Random", line=dict(dash="dash", color="#aab5c6")))
+            fig.update_layout(title="ROC curve", xaxis_title="False positive rate", yaxis_title="True positive rate", height=320)
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            fig = go.Figure(go.Scatter(x=recall, y=precision, mode="lines", name=f"AP {average_precision_score(y,scores):.3f}"))
+            fig.update_layout(title="Precision-recall curve", xaxis_title="Recall", yaxis_title="Precision", height=320, showlegend=True)
+            st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.info("Install scikit-learn to calculate evaluation metrics.")
+    except Exception as exc:
+        st.warning(f"Could not evaluate this dataset: {exc}")
+
 
 BASE_DIR = Path(__file__).parent
+REQUIRED_COLUMNS = ['Time'] + [f'V{i}' for i in range(1, 29)] + ['Amount']
 
-try:
-    from sklearn.metrics import (
-        confusion_matrix, roc_curve, auc,
-        precision_recall_curve, average_precision_score, classification_report
-    )
-    SKLEARN_METRICS_AVAILABLE = True
-except ImportError:
-    SKLEARN_METRICS_AVAILABLE = False
+st.set_page_config(page_title='Fraud Operations', page_icon='◈', layout='wide', initial_sidebar_state='expanded')
+st.markdown('''<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+html,body,[class*="st-"]{font-family:'DM Sans',sans-serif} .stApp{background:#f3f6fa;color:#12243a}
+[data-testid="stHeader"]{background:transparent} .block-container{max-width:1450px;padding-top:2.2rem;padding-bottom:3rem}
+h1,h2,h3{font-family:Manrope,sans-serif;color:#10233a;letter-spacing:-.035em} h1{font-size:2rem!important}
+section[data-testid="stSidebar"]{background:#101f33} section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] p,section[data-testid="stSidebar"] label,section[data-testid="stSidebar"] span{color:#d3dfec}
+section[data-testid="stSidebar"] [role="radiogroup"] label{border-radius:9px;padding:8px 10px;margin:2px 0}
+section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked){background:#213953}
+div[data-testid="stMetric"]{background:#fff;border:1px solid #e1e8f0;border-radius:14px;padding:18px 20px;box-shadow:0 3px 14px #14284008}
+div[data-testid="stMetricLabel"]{color:#67778b;font-size:.85rem} div[data-testid="stMetricValue"]{color:#10233a;font-family:Manrope,sans-serif;font-weight:800}
+div[data-testid="stDataFrame"]{border:1px solid #e0e7ef;border-radius:12px;overflow:hidden}
+div[data-testid="stFileUploaderDropzone"]{background:#fff;border:1px dashed #aebfd1;border-radius:14px}
+div.stButton>button,div.stDownloadButton>button{border-radius:9px;font-weight:700;min-height:42px}
+div.stButton>button[kind="primary"]{background:#145bdb;border-color:#145bdb}
+.brand{padding:8px 4px 22px;border-bottom:1px solid #34445a;margin-bottom:20px}.brand-logo{display:inline-block;color:#8cd8d2;background:#263f51;border-radius:10px;padding:8px 12px;font-weight:800;font-size:20px;margin-right:9px}.brand-name{color:#f4f8fc;font-family:Manrope;font-size:17px;font-weight:800}.brand-sub{font-size:11px;color:#9cafc4;letter-spacing:.12em;margin-top:8px;text-transform:uppercase}
+.eyebrow{color:#547394;font-size:11px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;margin-bottom:8px}
+.heading-note{color:#64758a;font-size:15px;margin-top:-8px;margin-bottom:20px}
+.hero{background:linear-gradient(110deg,#12273f,#1b3b58);border-radius:16px;padding:25px 28px;margin-bottom:20px;color:#fff}.hero .eyebrow{color:#84d2c9}.hero h2{color:#fff;font-size:24px;margin:3px 0 8px}.hero p{color:#bdccda;margin:0;max-width:670px;font-size:14px;line-height:1.6}
+.section-label{color:#667b92;font-size:11px;letter-spacing:.13em;font-weight:800;text-transform:uppercase;margin:22px 0 8px}
+.empty{background:#fff;border:1px solid #e1e8f0;border-radius:14px;padding:30px;color:#607389;text-align:center}.empty strong{display:block;color:#172d45;font-size:17px;margin-bottom:6px}
+.detail{background:#fff;border:1px solid #e1e8f0;border-radius:14px;padding:20px 22px;margin:8px 0}.detail .title{font-family:Manrope;font-weight:800;color:#172c43;font-size:18px}.detail .sub{font-size:13px;color:#67798c;margin-top:6px}
+.flag{display:inline-block;background:#fff0ee;color:#ac3a38;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:.04em}.clear{background:#e6f6f1;color:#08775d}
+@media(max-width:700px){.block-container{padding-top:1rem}.hero{padding:20px}h1{font-size:1.6rem!important}}
+</style>''', unsafe_allow_html=True)
 
-try:
-    import shap
-    SHAP_AVAILABLE = True
-except ImportError:
-    SHAP_AVAILABLE = False
+for k,v in {'history':[], 'batch':None, 'reviews':{}, 'single':None, 'nav':'Overview'}.items():
+    if k not in st.session_state: st.session_state[k]=v
 
-# ============================================================
-# CONFIG
-# ============================================================
-MODEL_INFO = {
-    "algorithm": "Random Forest",
-    "accuracy": 0.999507,
-    "precision": 0.971831,
-    "recall": 0.726316,
-    "f1_score": 0.831325,
-    "dataset": "Credit Card Dataset (Kaggle)",
-    "training_samples": "N/A",
-}
-
-REQUIRED_COLUMNS = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-LABEL_COLUMN_CANDIDATES = ["Class", "class", "Label", "label", "Actual", "actual", "is_fraud", "isFraud"]
-
-COLORS = {
-    "navy": "#0B1F3A", "navy_light": "#16314F", "accent": "#4F7CFF", "accent2": "#7C5CFF",
-    "accent_soft": "#EAF0FF", "fraud": "#E5484D", "fraud_soft": "#FDEAEA",
-    "legit": "#1FA97A", "legit_soft": "#E8F8F1", "amber": "#F5A623", "amber_soft": "#FFF4E0",
-    "muted": "#64748B",
-}
-FRAUD_MAP = {"Legitimate": COLORS["legit"], "Fraud": COLORS["fraud"]}
-
-st.set_page_config(page_title="Financial Fraud Detection", page_icon="💳", layout="wide", initial_sidebar_state="expanded")
-
-# ============================================================
-# THEME
-# ============================================================
-st.markdown(f"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-html, body, [class*="css"] {{ font-family:'Inter',sans-serif; }}
-html {{ color-scheme: light; }}
-/* Low-specificity reset so plain Streamlit text stays readable even if a
-   visitor's browser/OS is set to dark mode. Any element with its own class
-   (hero-banner, feature-card, metric-card, sidebar, etc.) already sets its
-   own color with higher specificity and overrides this automatically. */
-p, li, span, div, label, small, td, th {{ color:{COLORS['navy']}; }}
-:root {{ --navy:{COLORS['navy']}; --accent:{COLORS['accent']}; --accent2:{COLORS['accent2']};
-  --accent-soft:{COLORS['accent_soft']}; --fraud:{COLORS['fraud']}; --fraud-soft:{COLORS['fraud_soft']};
-  --legit:{COLORS['legit']}; --legit-soft:{COLORS['legit_soft']}; --amber:{COLORS['amber']};
-  --amber-soft:{COLORS['amber_soft']}; --muted:{COLORS['muted']}; }}
-
-.stApp {{ background: radial-gradient(1200px 600px at 10% -10%, #EEF3FF 0%, transparent 60%),
-  radial-gradient(1000px 500px at 100% 0%, #F3FBF7 0%, transparent 55%), #F7F9FC; }}
-
-section[data-testid="stSidebar"] {{ background: linear-gradient(200deg, var(--navy) 0%, #10233D 55%, #0A1830 100%); }}
-section[data-testid="stSidebar"] * {{ color:#E8EEF9 !important; }}
-section[data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,0.12); }}
-section[data-testid="stSidebar"] .stRadio label {{ font-weight:600; }}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
-  padding:0.35rem 0.6rem; border-radius:8px; transition:background .15s ease; }}
-section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{ background: rgba(255,255,255,0.06); }}
-
-h1,h2,h3 {{ color:var(--navy); font-weight:800 !important; letter-spacing:-0.02em; }}
-
-/* Hero */
-.hero-banner {{ background: linear-gradient(120deg, var(--navy) 0%, #1E3A5F 55%, var(--accent) 140%);
-  padding: 3rem 2.6rem; border-radius: 20px; color:white; margin-bottom: 1.8rem;
-  box-shadow: 0 16px 40px rgba(11,31,58,0.28); position:relative; overflow:hidden; }}
-.hero-banner::after {{ content:""; position:absolute; inset:0;
-  background: radial-gradient(circle at 85% 20%, rgba(124,92,255,0.35), transparent 55%); }}
-.hero-banner h1 {{ color:white !important; font-size:2.5rem; margin-bottom:0.6rem; position:relative; }}
-.hero-banner p {{ color:#D6E2F5; font-size:1.05rem; max-width:640px; margin:0; position:relative; }}
-.hero-badge {{ display:inline-flex; align-items:center; gap:0.4rem; background:rgba(255,255,255,0.14);
-  color:#EAF0FF; font-size:0.75rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
-  padding:0.3rem 0.8rem; border-radius:999px; margin-bottom:1rem; position:relative;
-  border:1px solid rgba(255,255,255,0.2); }}
-.live-dot {{ width:7px; height:7px; border-radius:50%; background:#3DDC97; box-shadow:0 0 0 rgba(61,220,151,0.6);
-  animation: pulseDot 1.8s infinite; display:inline-block; }}
-@keyframes pulseDot {{
-  0% {{ box-shadow:0 0 0 0 rgba(61,220,151,0.55); }}
-  70% {{ box-shadow:0 0 0 8px rgba(61,220,151,0); }}
-  100% {{ box-shadow:0 0 0 0 rgba(61,220,151,0); }}
-}}
-
-/* Cards */
-.feature-card, .glass-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.6rem;
-  height:100%; box-shadow:0 4px 16px rgba(15,30,60,0.05); transition:transform .15s ease, box-shadow .15s ease; }}
-.feature-card:hover {{ transform:translateY(-4px); box-shadow:0 14px 28px rgba(15,30,60,0.12); border-color:#DCE6F7; }}
-.feature-card .icon {{ font-size:1.9rem; margin-bottom:0.5rem; filter: drop-shadow(0 4px 8px rgba(79,124,255,0.25)); }}
-.feature-card h4 {{ margin:0 0 0.4rem 0; color:var(--navy); font-weight:700; }}
-.feature-card p {{ color:var(--muted); font-size:0.92rem; margin:0; }}
-
-/* Nav cards (dashboard home) */
-.nav-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.5rem 1.5rem 1.1rem 1.5rem;
-  box-shadow:0 4px 16px rgba(15,30,60,0.05); transition:transform .15s ease, box-shadow .15s ease;
-  margin-bottom:0.6rem; position:relative; overflow:hidden; }}
-.nav-card:hover {{ transform:translateY(-4px); box-shadow:0 16px 30px rgba(15,30,60,0.14); border-color:#DCE6F7; }}
-.nav-card .nav-icon {{ font-size:1.7rem; width:48px; height:48px; display:flex; align-items:center; justify-content:center;
-  background:var(--accent-soft); border-radius:12px; margin-bottom:0.8rem; }}
-.nav-card h4 {{ margin:0 0 0.3rem 0; color:var(--navy); font-weight:800; font-size:1.05rem; }}
-.nav-card p {{ color:var(--muted); font-size:0.88rem; margin:0 0 0.6rem 0; min-height:2.6rem; }}
-.nav-card .stButton>button {{ width:100%; background:var(--accent-soft) !important; color:var(--accent) !important;
-  box-shadow:none !important; font-weight:700 !important; }}
-.nav-card .stButton>button:hover {{ background:var(--accent) !important; color:white !important; transform:none; }}
-
-.section-pill {{ display:inline-block; background:var(--accent-soft); color:var(--accent); font-weight:700;
-  font-size:0.75rem; letter-spacing:0.06em; text-transform:uppercase; padding:0.3rem 0.85rem;
-  border-radius:999px; margin-bottom:0.6rem; }}
-
-/* KPI / metric cards with staggered entrance animation */
-@keyframes fadeSlideUp {{
-  from {{ opacity:0; transform:translateY(10px); }}
-  to {{ opacity:1; transform:translateY(0); }}
-}}
-.metric-card {{ background:white; border:1px solid #EAEFF5; border-radius:16px; padding:1.3rem 1.5rem;
-  box-shadow:0 4px 16px rgba(15,30,60,0.05); text-align:left; position:relative; overflow:hidden;
-  transition:transform .15s ease; animation: fadeSlideUp .5s ease both; }}
-.metric-card:hover {{ transform:translateY(-2px); }}
-.metric-card::before {{ content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent); }}
-.metric-card.fraud::before {{ background:var(--fraud); }}
-.metric-card.legit::before {{ background:var(--legit); }}
-.metric-card.alert {{ animation: fadeSlideUp .5s ease both, cardGlow 2.2s ease-in-out infinite; }}
-@keyframes cardGlow {{
-  0%, 100% {{ box-shadow:0 4px 16px rgba(15,30,60,0.05); }}
-  50% {{ box-shadow:0 4px 22px rgba(229,72,77,0.28); }}
-}}
-.metric-card .label {{ color:var(--muted); font-size:0.8rem; font-weight:700; text-transform:uppercase;
-  letter-spacing:0.04em; margin-bottom:0.4rem; display:flex; justify-content:space-between; align-items:center; }}
-.metric-card .value {{ font-size:2rem; font-weight:800; color:var(--navy); }}
-.metric-card.fraud .value {{ color:var(--fraud); }}
-.metric-card.legit .value {{ color:var(--legit); }}
-.metric-card.accent .value {{ color:var(--accent); }}
-.metric-card .delta {{ font-size:0.78rem; font-weight:600; color:var(--muted); margin-top:0.25rem; }}
-
-/* Buttons */
-.stButton>button, .stDownloadButton>button {{ background:linear-gradient(120deg,var(--navy),#173a63) !important;
-  color:white !important; border-radius:10px !important; border:none !important; font-weight:600 !important;
-  padding:0.55rem 1.3rem !important; transition:all .15s ease !important; box-shadow:0 4px 12px rgba(11,31,58,0.18); }}
-.stButton>button:hover, .stDownloadButton>button:hover {{
-  background:linear-gradient(120deg,var(--accent),var(--accent2)) !important; transform:translateY(-1px);
-  box-shadow:0 8px 18px rgba(79,124,255,0.3); }}
-
-/* Upload area */
-.upload-instructions {{ background:white; border:1px solid #EAEFF5; border-radius:14px; padding:1.1rem 1.4rem;
-  margin-bottom:0.9rem; box-shadow:0 2px 10px rgba(15,30,60,0.04); }}
-.upload-instructions .cols-chip {{ display:inline-block; background:var(--accent-soft); color:var(--accent);
-  font-family: 'JetBrains Mono', monospace; font-size:0.72rem; font-weight:700; padding:0.15rem 0.5rem;
-  border-radius:6px; margin:0.15rem 0.2rem 0.15rem 0; }}
-[data-testid="stFileUploaderDropzone"] {{ border-radius:14px; border:2px dashed #C7D3E6 !important; background:#FBFCFE; }}
-.file-chip-row {{ display:flex; gap:0.7rem; flex-wrap:wrap; margin:0.8rem 0 0.2rem 0; }}
-.file-chip {{ background:white; border:1px solid #EAEFF5; border-radius:12px; padding:0.6rem 1rem;
-  box-shadow:0 2px 8px rgba(15,30,60,0.04); font-size:0.82rem; color:var(--muted); }}
-.file-chip b {{ color:var(--navy); display:block; font-size:1rem; }}
-
-[data-testid="stDataFrame"] {{ border-radius:14px; overflow:hidden; border:1px solid #EAEFF5;
-  box-shadow:0 2px 10px rgba(15,30,60,0.04); }}
-div[data-testid="stAlert"] {{ border-radius:12px; }}
-
-/* Result banner (single transaction) */
-.result-banner {{ border-radius:16px; padding:1.5rem 1.7rem; margin:0.8rem 0; box-shadow:0 6px 20px rgba(15,30,60,0.06);
-  display:flex; align-items:center; gap:1rem; }}
-.result-banner .r-icon {{ font-size:2.2rem; }}
-.result-banner .r-title {{ font-weight:800; font-size:1.25rem; margin-bottom:0.15rem; }}
-.result-banner .r-sub {{ font-size:0.9rem; font-weight:500; opacity:0.85; }}
-.result-banner.fraud {{ background:var(--fraud-soft); color:var(--fraud); border:1px solid rgba(229,72,77,0.25); }}
-.result-banner.legit {{ background:var(--legit-soft); color:var(--legit); border:1px solid rgba(31,169,122,0.25); }}
-
-/* Filters panel */
-.filter-panel {{ background:white; border:1px solid #EAEFF5; border-radius:14px; padding:1rem 1.3rem 0.3rem 1.3rem;
-  margin-bottom:0.8rem; }}
-
-/* Footer */
-.app-footer {{ margin-top:2.5rem; padding:1.4rem 0 0.6rem 0; border-top:1px solid #E4E9F2;
-  display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; }}
-.app-footer .f-left {{ color:var(--muted); font-size:0.82rem; }}
-.app-footer .f-right {{ display:flex; gap:0.6rem; align-items:center; }}
-.app-footer .f-badge {{ background:var(--accent-soft); color:var(--accent); font-size:0.72rem; font-weight:700;
-  padding:0.25rem 0.6rem; border-radius:999px; }}
-hr {{ margin:1.4rem 0; }}
-</style>
-""", unsafe_allow_html=True)
-
-
-def metric_card(label, value, variant="", delay=0.0, badge=None, alert=False):
-    classes = f"metric-card {variant}{' alert' if alert else ''}"
-    badge_html = f'<span>{badge}</span>' if badge else ""
-    st.markdown(
-        f'<div class="{classes}" style="animation-delay:{delay}s">'
-        f'<div class="label"><span>{label}</span>{badge_html}</div>'
-        f'<div class="value">{value}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def style_fig(fig, title=None, legend=True):
-    """Apply consistent, professional theming to any Plotly figure."""
-    fig.update_layout(
-        title=title or (fig.layout.title.text if fig.layout.title else None),
-        font=dict(family="Inter, sans-serif", color=COLORS["navy"]),
-        title_font=dict(size=16, family="Inter, sans-serif"),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(t=55, l=10, r=10, b=10),
-        legend=dict(orientation="h", y=-0.18) if legend else dict(),
-        showlegend=legend,
-        hoverlabel=dict(bgcolor="white", font_family="Inter, sans-serif"),
-    )
-    fig.update_xaxes(gridcolor="#EEF1F6", zerolinecolor="#EEF1F6")
-    fig.update_yaxes(gridcolor="#EEF1F6", zerolinecolor="#EEF1F6")
-    return fig
-
-
-def make_gauge(value_pct, threshold_pct=50.0):
-    """Fraud-probability gauge with green/amber/red risk zones and a
-    threshold marker for the currently selected decision threshold."""
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=value_pct,
-        number={"suffix": "%", "font": {"size": 34, "color": COLORS["navy"]}},
-        gauge={
-            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": COLORS["muted"]},
-            "bar": {"color": COLORS["navy"], "thickness": 0.28},
-            "bgcolor": "white",
-            "borderwidth": 0,
-            "steps": [
-                {"range": [0, 40], "color": COLORS["legit_soft"]},
-                {"range": [40, 70], "color": COLORS["amber_soft"]},
-                {"range": [70, 100], "color": COLORS["fraud_soft"]},
-            ],
-            "threshold": {
-                "line": {"color": COLORS["fraud"], "width": 3},
-                "thickness": 0.85,
-                "value": threshold_pct,
-            },
-        },
-    ))
-    fig.update_layout(
-        height=250, margin=dict(t=30, b=10, l=25, r=25),
-        paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", color=COLORS["navy"]),
-    )
-    return fig
-
-
-def footer():
-    st.markdown(f"""
-    <div class="app-footer">
-        <div class="f-left">💳 Financial Fraud Detection System · Built with Streamlit, scikit-learn &amp; Plotly ·
-        For educational / demo purposes — not a certified compliance tool.</div>
-        <div class="f-right">
-            <span class="f-badge"><span class="live-dot"></span>&nbsp; Model: {selected_model_path.split('/')[-1]}</span>
-            <span class="f-badge">v1.1</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def score_dataframe(model, X, threshold=0.5):
-    """Run predictions using predict_proba + an adjustable threshold when
-    available, falling back to the model's default predict() otherwise."""
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X)[:, 1]
-        preds = (proba >= threshold).astype(int)
-        return preds, proba.round(4)
-    return model.predict(X), None
-
-
-# ============================================================
-# MODEL LOADING
-# ============================================================
 @st.cache_resource
-def load_model(path):
+def load_model(path, modified):
     return joblib.load(path)
 
+def predict(model, x, threshold):
+    if hasattr(model, 'predict_proba'):
+        classes = list(model.classes_)
+        if 1 not in classes: raise ValueError('Model classes must include 1 for fraud.')
+        probs = np.asarray(model.predict_proba(x))[:, classes.index(1)]
+        if not np.isfinite(probs).all(): raise ValueError('Model returned invalid probabilities.')
+        return (probs >= threshold).astype(int), probs
+    preds = np.asarray(model.predict(x))
+    if not np.isin(preds, [0,1]).all(): raise ValueError('Model predictions must use 0 and 1.')
+    return preds, None
 
-def discover_models():
-    found = sorted(BASE_DIR.glob("*.pkl"))
-    return [str(f) for f in found] if found else [str(BASE_DIR / "model.pkl")]
+def prepare(df):
+    missing=[c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing: raise ValueError('Missing required columns: '+', '.join(missing))
+    if df.empty: raise ValueError('The CSV contains no rows.')
+    reserved=[c for c in ['Prediction','Fraud_Probability','Review_Status','Case_ID'] if c in df.columns]
+    if reserved: raise ValueError('Rename these reserved output columns before scoring: '+', '.join(reserved))
+    x=df[REQUIRED_COLUMNS].apply(pd.to_numeric, errors='coerce')
+    invalid=x.isna() | ~np.isfinite(x)
+    if invalid.any().any(): raise ValueError('Missing or non-numeric values in: '+', '.join(invalid.columns[invalid.any()].tolist()))
+    return x
 
+def batch_view():
+    result=st.session_state.batch['data'].copy()
+    result['Review_Status']=result['Case_ID'].map(st.session_state.reviews).fillna('New')
+    return result
 
-def get_model(path):
+def heading(kicker,title,subtitle):
+    st.markdown(f'<div class="eyebrow">{kicker}</div>',unsafe_allow_html=True)
+    st.title(title)
+    st.markdown(f'<div class="heading-note">{subtitle}</div>',unsafe_allow_html=True)
+
+def navigate(target):
+    st.session_state.nav = target
+
+def summary(df):
+    n=len(df); f=int((df['Prediction']=='Fraud').sum())
+    a,b,c,d=st.columns(4)
+    a.metric('Transactions',f'{n:,}'); b.metric('Flagged for review',f'{f:,}'); c.metric('Not flagged',f'{n-f:,}'); d.metric('Flagged rate',f'{f/n:.2%}' if n else '—')
+
+with st.sidebar:
+    st.markdown('<div class="brand"><span class="brand-logo">◈</span><span class="brand-name">SENTINEL</span><div class="brand-sub">Fraud intelligence workspace</div></div>',unsafe_allow_html=True)
+    st.caption('WORKSPACE')
+    page=st.radio('Navigation',['Overview','Batch analysis','Investigation queue','Single transaction','Run history','Model information'],key='nav',label_visibility='collapsed')
+    st.divider()
+    paths=sorted(BASE_DIR.glob('*.pkl'))
+    if not paths: paths=[BASE_DIR/'model.pkl']
+    selected=st.selectbox('Active model',paths,format_func=lambda p:p.name) if len(paths)>1 else paths[0]
+    if len(paths)==1: st.caption('MODEL  ·  '+selected.name)
     try:
-        return load_model(path), None
-    except FileNotFoundError:
-        return None, f"{path} not found."
-    except Exception as e:
-        return None, f"Failed to load model: {e}"
+        model=load_model(str(selected),selected.stat().st_mtime_ns)
+        st.caption('●  Model loaded')
+    except Exception as exc:
+        model=None
+        st.warning(f'Model unavailable: {exc}')
+    st.divider(); st.caption('Session workspace · Reviews and history are temporary')
 
-
-# ============================================================
-# SESSION STATE
-# ============================================================
-st.session_state.setdefault("history", [])
-st.session_state.setdefault("nav", "🏠 Home")
-
-
-def go_to(target):
-    st.session_state["nav"] = target
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-st.sidebar.markdown("""
-<div style="text-align:center; padding:0.5rem 0 1.2rem 0;">
-  <div style="font-size:2.2rem;">💳</div>
-  <div style="font-size:1.15rem; font-weight:800; letter-spacing:-0.01em;">Fraud Detection</div>
-  <div style="font-size:0.8rem; color:#B7C6E0; margin-top:0.2rem;">
-    <span class="live-dot"></span>&nbsp; ML-Powered Transaction Analysis
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-NAV_OPTIONS = [
-    "🏠 Home", "📊 Upload & Predict", "🔎 Single Transaction",
-    "🕒 Prediction History", "🧠 Model Info", "ℹ️ About",
-]
-page = st.sidebar.radio("Navigate", NAV_OPTIONS, key="nav", label_visibility="collapsed")
-
-available_models = discover_models()
-if len(available_models) > 1:
-    st.sidebar.markdown("---")
-    st.sidebar.caption("MODEL")
-    selected_model_path = st.sidebar.selectbox("Choose a model", available_models, label_visibility="collapsed")
-else:
-    selected_model_path = available_models[0]
-
-st.sidebar.markdown("---")
-st.sidebar.caption("Built with scikit-learn / XGBoost + Streamlit")
-
-# ============================================================
-# PAGE: HOME (Dashboard)
-# ============================================================
-if page == "🏠 Home":
-    st.markdown("""
-    <div class="hero-banner">
-        <div class="hero-badge"><span class="live-dot"></span> Real-Time ML Scoring</div>
-        <h1>💳 Financial Fraud Detection</h1>
-        <p>An end-to-end system that analyzes transaction data and flags potentially
-        fraudulent activity in real time — powered by a trained classification model
-        and an interactive dashboard.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ---- Session snapshot (animated KPIs) ----
-    hist = st.session_state.history
-    st.markdown('<span class="section-pill">Session Snapshot</span>', unsafe_allow_html=True)
-    if hist:
-        total_scored = sum(h["Total"] for h in hist)
-        total_fraud = sum(h["Fraud"] for h in hist)
-        runs = len(hist)
-        last_run = hist[-1]["Timestamp"]
-        overall_rate = (total_fraud / total_scored * 100) if total_scored else 0
-
-        k1, k2, k3, k4 = st.columns(4)
-        with k1:
-            metric_card("Transactions Scored", f"{total_scored:,}", "accent", delay=0.0)
-        with k2:
-            metric_card("Fraud Flagged", f"{total_fraud:,}", "fraud", delay=0.08, alert=total_fraud > 0)
-        with k3:
-            metric_card("Batches Run", f"{runs:,}", "legit", delay=0.16)
-        with k4:
-            metric_card("Overall Fraud Rate", f"{overall_rate:.2f}%", "accent", delay=0.24, badge=f"since {last_run.split(' ')[0]}")
+if page=='Overview':
+    heading('Operations / Overview','Risk at a glance','A clear view of the latest scoring activity and transactions requiring attention.')
+    st.markdown('<div class="hero"><div class="eyebrow">Your investigation workspace</div><h2>Find the signal. Review with confidence.</h2><p>Bring transaction scoring, risk analysis, and case review together in one focused workspace.</p></div>',unsafe_allow_html=True)
+    if st.session_state.batch is None:
+        a,b,c,d=st.columns(4)
+        for col,label in zip([a,b,c,d],['Transactions','Flagged for review','Not flagged','Flagged rate']): col.metric(label,'—')
+        st.markdown('<div class="section-label">Getting started</div><div class="empty"><strong>Your workspace is ready</strong>Upload a transaction CSV to generate your first risk overview.</div>',unsafe_allow_html=True)
+        st.button('Start batch analysis →',type='primary',on_click=navigate,args=('Batch analysis',))
     else:
-        st.info("No predictions run yet this session — scores from **Upload & Predict** will summarize here.")
-
-    # ---- Navigation cards ----
-    st.markdown('<span class="section-pill">Jump In</span>', unsafe_allow_html=True)
-    nav_cards = [
-        ("📊", "Upload & Predict", "Score a batch of transactions from CSV with adjustable threshold and full analytics.", "📊 Upload & Predict"),
-        ("🔎", "Single Transaction", "Manually enter one transaction's features for an instant fraud check.", "🔎 Single Transaction"),
-        ("🕒", "Prediction History", "Review batches you've already scored this session.", "🕒 Prediction History"),
-        ("🧠", "Model Info", "See the algorithm and performance metrics behind the predictions.", "🧠 Model Info"),
-    ]
-    cols = st.columns(4)
-    for col, (icon, title, desc, target) in zip(cols, nav_cards):
-        with col:
-            st.markdown(
-                f'<div class="nav-card"><div class="nav-icon">{icon}</div>'
-                f'<h4>{title}</h4><p>{desc}</p></div>',
-                unsafe_allow_html=True,
-            )
-            st.button("Open →", key=f"navcard_{target}", on_click=go_to, args=(target,), use_container_width=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<span class="section-pill">How It Works</span>', unsafe_allow_html=True)
-    steps = [
-        ("📤", "Upload", "Upload a CSV of transactions and preview your data instantly."),
-        ("🔍", "Predict", "Every transaction is scored with an adjustable fraud threshold."),
-        ("📈", "Analyze", "Explore results, feature drivers, and evaluation metrics."),
-        ("⬇️", "Export", "Download filtered, full, or fraud-only results."),
-    ]
-    for col, (icon, title, desc) in zip(st.columns(4), steps):
-        col.markdown(f'<div class="feature-card"><div class="icon">{icon}</div>'
-                      f'<h4>{title}</h4><p>{desc}</p></div>', unsafe_allow_html=True)
-
-# ============================================================
-# PAGE: UPLOAD & PREDICT
-# ============================================================
-elif page == "📊 Upload & Predict":
-    st.markdown('<span class="section-pill">Live Prediction</span>', unsafe_allow_html=True)
-    st.title("📊 Upload & Predict")
-    st.caption("Upload a transaction CSV to generate fraud predictions and explore the results.")
-
-    model, error = get_model(selected_model_path)
-    if error:
-        st.error(error); st.stop()
-
-    threshold = 0.5
-    if hasattr(model, "predict_proba"):
-        threshold = st.slider("Fraud probability threshold", 0.0, 1.0, 0.5, 0.01,
-            help="Transactions with predicted fraud probability at or above this value are "
-                 "flagged as Fraud. Lower it to catch more fraud at the cost of more false "
-                 "alarms; raise it to reduce false alarms at the cost of missed fraud.")
-    else:
-        st.info("This model doesn't expose probability scores, so the threshold slider is "
-                "unavailable — predictions use the model's default decision rule.")
-
-    st.markdown(
-        '<div class="upload-instructions">Required columns: '
-        + "".join(f'<span class="cols-chip">{c}</span>' for c in ["Time", "V1…V28", "Amount"])
-        + '<div style="margin-top:0.5rem; color:var(--muted); font-size:0.85rem;">'
-          'Optional label column (<code>Class</code>, <code>Label</code>, etc.) enables live '
-          'evaluation metrics below.</div></div>',
-        unsafe_allow_html=True,
-    )
-    uploaded_file = st.file_uploader("Upload Transaction CSV", type=["csv"], label_visibility="collapsed")
-
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-        except Exception as e:
-            st.error(f"Could not read the CSV file: {e}"); st.stop()
-
-        size_kb = uploaded_file.size / 1024
-        st.markdown(
-            '<div class="file-chip-row">'
-            f'<div class="file-chip"><b>{uploaded_file.name}</b>File name</div>'
-            f'<div class="file-chip"><b>{len(df):,}</b>Rows</div>'
-            f'<div class="file-chip"><b>{len(df.columns)}</b>Columns</div>'
-            f'<div class="file-chip"><b>{size_kb:,.1f} KB</b>Size</div>'
-            '</div>', unsafe_allow_html=True
-        )
-
-        with st.expander("Dataset Preview", expanded=False):
-            st.dataframe(df.head(), use_container_width=True)
-
-        missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-        if missing:
-            st.error(f"Missing columns: {missing}"); st.stop()
-        if len(df) == 0:
-            st.warning("The uploaded file has no rows to score."); st.stop()
-
-        X = df[REQUIRED_COLUMNS]
-        label_col = next((c for c in LABEL_COLUMN_CANDIDATES if c in df.columns), None)
-
-        na_rows = X.isnull().any(axis=1)
-        if na_rows.any():
-            st.warning(f"{int(na_rows.sum())} row(s) contain missing values in feature "
-                       "columns and will be dropped before scoring.")
-            df = df.loc[~na_rows].reset_index(drop=True)
-            X = df[REQUIRED_COLUMNS]
-        if len(df) == 0:
-            st.warning("No valid rows remain after removing missing values."); st.stop()
-
-        with st.spinner("Scoring transactions..."):
-            try:
-                preds, proba = score_dataframe(model, X, threshold)
-            except Exception as e:
-                st.error(f"Prediction failed: {e}"); st.stop()
-
-        df["Prediction"] = pd.Series(preds).map({0: "Legitimate", 1: "Fraud"})
-        if proba is not None:
-            df["Fraud_Probability"] = proba
-
-        # ---- Metrics ----
-        st.markdown("#### Dashboard Metrics")
-        total_count = len(df)
-        fraud_count = int((df["Prediction"] == "Fraud").sum())
-        legit_count = total_count - fraud_count
-        fraud_rate = (fraud_count / total_count * 100) if total_count else 0
-
-        kpi_defs = [
-            ("Total Transactions", f"{total_count:,}", "accent", False),
-            ("Fraud Transactions", f"{fraud_count:,}", "fraud", fraud_count > 0),
-            ("Legitimate Transactions", f"{legit_count:,}", "legit", False),
-            ("Fraud Rate", f"{fraud_rate:.2f}%", "fraud", fraud_rate > 5),
-        ]
-        for i, (col, (label, val, variant, alert)) in enumerate(zip(st.columns(4), kpi_defs)):
-            with col:
-                metric_card(label, val, variant, delay=i * 0.08, alert=alert)
-
-        if fraud_count == 0:
-            st.success("No transactions were flagged as fraud at this threshold.")
-        if proba is not None and fraud_count > 0:
-            avg_conf = df.loc[df["Prediction"] == "Fraud", "Fraud_Probability"].mean()
-            st.caption(f"Average model confidence on flagged fraud: **{avg_conf:.2%}**")
-
-        # ---- Charts ----
-        st.markdown("#### Visual Breakdown")
-        c1, c2 = st.columns(2)
-        with c1:
-            fig = px.pie(names=["Legitimate", "Fraud"], values=[legit_count, fraud_count],
-                         color=["Legitimate", "Fraud"], color_discrete_map=FRAUD_MAP, hole=0.55)
-            fig.update_traces(textinfo="percent+label", textfont_size=13)
-            fig.add_annotation(text=f"<b>{fraud_rate:.1f}%</b><br><span style='font-size:11px'>fraud</span>",
-                               showarrow=False, font=dict(size=18, color=COLORS["navy"]))
-            st.plotly_chart(style_fig(fig, "Transaction Distribution"), use_container_width=True)
-        with c2:
-            fig = px.bar(x=["Legitimate", "Fraud"], y=[legit_count, fraud_count],
-                         labels={"x": "Class", "y": "Count"}, color=["Legitimate", "Fraud"],
-                         color_discrete_map=FRAUD_MAP, text=[legit_count, fraud_count])
-            fig.update_traces(marker_line_width=0, textposition="outside")
-            st.plotly_chart(style_fig(fig, "Transaction Counts", legend=False), use_container_width=True)
-
-        c3, c4 = st.columns(2)
-        with c3:
-            fig = px.histogram(df, x="Amount", color="Prediction", nbins=40, barmode="overlay",
-                               color_discrete_map=FRAUD_MAP, opacity=0.7)
-            st.plotly_chart(style_fig(fig, "Transaction Amount by Class"), use_container_width=True)
-        with c4:
-            fig = px.scatter(df, x="Time", y="Amount", color="Prediction",
-                             color_discrete_map=FRAUD_MAP, opacity=0.6)
-            st.plotly_chart(style_fig(fig, "Transactions Over Time"), use_container_width=True)
-
-        # ---- Feature importance ----
-        if hasattr(model, "feature_importances_"):
-            st.markdown("#### What Drives These Predictions")
-            st.caption("Global feature importance from the trained model (not specific to any single transaction).")
-            top_imp = pd.Series(model.feature_importances_, index=REQUIRED_COLUMNS).sort_values(ascending=False).head(10)
-            fig = px.bar(x=top_imp.values, y=top_imp.index, orientation="h",
-                        labels={"x": "Importance", "y": "Feature"})
-            fig.update_traces(marker_color=COLORS["accent"], marker_line_width=0)
-            fig.update_layout(yaxis=dict(autorange="reversed"))
-            st.plotly_chart(style_fig(fig, "Top 10 Most Influential Features", legend=False), use_container_width=True)
-
-        # ---- Evaluation vs ground truth ----
-        if label_col and SKLEARN_METRICS_AVAILABLE:
-            st.markdown("#### Evaluation Against Ground Truth")
-            st.caption(f"Detected a label column (`{label_col}`) — comparing predictions against it.")
-            y_true = df[label_col].astype(int)
-            y_pred = (df["Prediction"] == "Fraud").astype(int)
-            single_class_sample = y_true.nunique() < 2
-
-            if single_class_sample:
-                st.warning(f"This sample only contains one class (`{label_col}` is all "
-                           f"{'fraud' if y_true.iloc[0] == 1 else 'legitimate'}) — the confusion "
-                           "matrix below will still show it, but ROC/PR curves and AUC aren't "
-                           "meaningful without both classes present. Upload a larger, mixed sample "
-                           "for a real evaluation.")
-
-            e1, e2 = st.columns(2)
-            with e1:
-                cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-                fig = px.imshow(cm, text_auto=True, x=["Predicted Legitimate", "Predicted Fraud"],
-                                y=["Actual Legitimate", "Actual Fraud"], color_continuous_scale="Blues")
-                st.plotly_chart(style_fig(fig, "Confusion Matrix", legend=False), use_container_width=True)
-            with e2:
-                if proba is not None and not single_class_sample:
-                    fpr, tpr, _ = roc_curve(y_true, proba)
-                    roc_auc = auc(fpr, tpr)
-                    fig = go.Figure([
-                        go.Scatter(x=fpr, y=tpr, mode="lines", name=f"ROC (AUC = {roc_auc:.3f})",
-                                   line=dict(color=COLORS["accent"])),
-                        go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Random",
-                                   line=dict(dash="dash", color="#C7D3E6")),
-                    ])
-                    fig.update_layout(xaxis_title="False Positive Rate", yaxis_title="True Positive Rate")
-                    st.plotly_chart(style_fig(fig, "ROC Curve"), use_container_width=True)
-                elif proba is None:
-                    st.info("ROC curve requires probability scores, which this model doesn't provide.")
-                else:
-                    st.info("ROC curve needs both classes present in the sample.")
-
-            if proba is not None and not single_class_sample:
-                prec, rec, _ = precision_recall_curve(y_true, proba)
-                ap = average_precision_score(y_true, proba)
-                fig = go.Figure(go.Scatter(x=rec, y=prec, mode="lines", name=f"PR (AP = {ap:.3f})",
-                                           line=dict(color=COLORS["fraud"])))
-                fig.update_layout(xaxis_title="Recall", yaxis_title="Precision")
-                st.plotly_chart(style_fig(fig, "Precision-Recall Curve"), use_container_width=True)
-
-            with st.expander("Classification report"):
-                st.code(classification_report(y_true, y_pred, labels=[0, 1], target_names=["Legitimate", "Fraud"], zero_division=0))
-
-        # ---- Interactive filters + results table ----
-        st.markdown("#### Prediction Results")
-        with st.expander("🔧 Filters", expanded=False):
-            st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
-            f1, f2, f3 = st.columns(3)
-            pred_filter = f1.multiselect("Prediction", ["Legitimate", "Fraud"], default=["Legitimate", "Fraud"])
-            amt_min, amt_max = float(df["Amount"].min()), float(df["Amount"].max())
-            if amt_min == amt_max:
-                amount_range = (amt_min, amt_max)
-                f2.caption(f"Amount: {amt_min:,.2f} (constant)")
-            else:
-                amount_range = f2.slider("Amount range", amt_min, amt_max, (amt_min, amt_max))
-            if proba is not None:
-                prob_range = f3.slider("Fraud probability range", 0.0, 1.0, (0.0, 1.0), 0.01)
-            else:
-                prob_range = None
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        filtered_df = df[df["Prediction"].isin(pred_filter) & df["Amount"].between(*amount_range)]
-        if prob_range is not None:
-            filtered_df = filtered_df[filtered_df["Fraud_Probability"].between(*prob_range)]
-
-        st.caption(f"Showing {len(filtered_df):,} of {total_count:,} transactions")
-        st.dataframe(filtered_df, use_container_width=True)
-
-        # ---- Downloads ----
-        st.markdown("#### Download Results")
-        d1, d2, d3 = st.columns(3)
-        d1.download_button("⬇️ Full Results", df.to_csv(index=False),
-                           file_name="predictions_full.csv", mime="text/csv", use_container_width=True)
-        d2.download_button("⬇️ Filtered View", filtered_df.to_csv(index=False),
-                           file_name="predictions_filtered.csv", mime="text/csv", use_container_width=True)
-        d3.download_button("⬇️ Fraud Only", df[df["Prediction"] == "Fraud"].to_csv(index=False),
-                           file_name="predictions_fraud_only.csv", mime="text/csv", use_container_width=True)
-
-        st.session_state.history.append({
-            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "File": uploaded_file.name,
-            "Model": selected_model_path, "Threshold": threshold, "Total": total_count,
-            "Fraud": fraud_count, "Legitimate": legit_count, "Fraud Rate": f"{fraud_rate:.2f}%",
-        })
-
-# ============================================================
-# PAGE: SINGLE TRANSACTION
-# ============================================================
-elif page == "🔎 Single Transaction":
-    st.markdown('<span class="section-pill">Manual Scoring</span>', unsafe_allow_html=True)
-    st.title("🔎 Score a Single Transaction")
-    st.caption("Enter a transaction's feature values by hand to get an instant prediction — "
-               "useful for quick demos without preparing a CSV.")
-
-    model, error = get_model(selected_model_path)
-    if error:
-        st.error(error); st.stop()
-
-    threshold = 0.5
-    if hasattr(model, "predict_proba"):
-        threshold = st.slider("Fraud probability threshold", 0.0, 1.0, 0.5, 0.01, key="single_threshold")
-
-    with st.form("single_transaction_form"):
-        st.markdown("##### Core Fields")
-        c1, c2 = st.columns(2)
-        time_val = c1.number_input("Time", value=0.0, step=1.0)
-        amount_val = c2.number_input("Amount", value=0.0, step=1.0, min_value=0.0)
-
-        st.markdown("##### PCA Features (V1–V28)")
-        v_values = {}
-        v_cols = st.columns(4)
-        for i in range(1, 29):
-            v_values[f"V{i}"] = v_cols[(i - 1) % 4].number_input(f"V{i}", value=0.0, step=0.1, key=f"v_{i}")
-
-        submitted = st.form_submit_button("Predict", use_container_width=True)
-
-    if submitted:
-        X_single = pd.DataFrame([{"Time": time_val, **v_values, "Amount": amount_val}])[REQUIRED_COLUMNS]
-        with st.spinner("Scoring transaction..."):
-            try:
-                pred, proba = score_dataframe(model, X_single, threshold)
-            except Exception as e:
-                st.error(f"Prediction failed: {e}"); st.stop()
-
-        is_fraud = pred[0] == 1
-        label = "Fraud Detected" if is_fraud else "Legitimate Transaction"
-        variant = "fraud" if is_fraud else "legit"
-        icon = "🚨" if is_fraud else "✅"
-        sub = "Recommend manual review or hold." if is_fraud else "No action needed at the current threshold."
-        conf_text = f" · confidence {proba[0]:.2%}" if proba is not None else ""
-
-        if proba is not None:
-            r1, r2 = st.columns([2, 1])
+        df=batch_view(); summary(df)
+        st.markdown('<div class="section-label">Latest batch · priority queue</div>',unsafe_allow_html=True)
+        q=df[df.Prediction=='Fraud']
+        if 'Fraud_Probability' in q: q=q.sort_values('Fraud_Probability',ascending=False)
+        if q.empty: st.info('No transactions were flagged in this batch at the selected threshold.')
         else:
-            r1, r2 = st.container(), None
+            st.dataframe(q[[c for c in ['Case_ID','Time','Amount','Fraud_Probability','Review_Status'] if c in q]].head(10),hide_index=True,use_container_width=True)
+            st.button('Open investigation queue →',on_click=navigate,args=('Investigation queue',))
+        st.caption(f"Latest batch: {st.session_state.batch['filename']} · {st.session_state.batch['timestamp']} · Session data")
 
-        with r1:
-            st.markdown(
-                f'<div class="result-banner {variant}"><div class="r-icon">{icon}</div>'
-                f'<div><div class="r-title">{label}{conf_text}</div><div class="r-sub">{sub}</div></div></div>',
-                unsafe_allow_html=True,
-            )
-        if proba is not None and r2 is not None:
-            with r2:
-                st.plotly_chart(make_gauge(proba[0] * 100, threshold * 100), use_container_width=True)
+elif page=='Batch analysis':
+    heading('Scoring / Batch analysis','Analyze transactions','Upload a CSV, check its structure, and run the selected model.')
+    left,right=st.columns([1.6,1])
+    with left:
+        file=st.file_uploader('Transaction CSV',type=['csv'],help='Required columns: Time, V1–V28, Amount.')
+    with right:
+        st.markdown('<div class="detail"><div class="title">Before you begin</div><div class="sub">Required fields: Time, V1–V28 and Amount. Additional columns are preserved. A 0/1 label column enables evaluation.</div></div>',unsafe_allow_html=True)
+    threshold=st.slider('Fraud decision threshold',0.0,1.0,0.5,0.01,disabled=model is not None and not hasattr(model,'predict_proba'),help='Scores at or above this threshold are flagged. Lower thresholds can increase alerts.')
+    if file:
+        try:
+            raw=pd.read_csv(file); x=prepare(raw)
+            with st.expander(f'Preview input · {len(raw):,} transactions',expanded=True): st.dataframe(raw.head(5),hide_index=True,use_container_width=True)
+            if st.button('Run fraud analysis',type='primary',disabled=model is None):
+                with st.spinner('Analyzing transactions...'): pred,prob=predict(model,x,threshold)
+                out=raw.reset_index(drop=True).copy(); out[REQUIRED_COLUMNS]=x.reset_index(drop=True); out.insert(0,'Case_ID',np.arange(1,len(out)+1)); out['Prediction']=np.where(pred==1,'Fraud','Legitimate')
+                if prob is not None: out['Fraud_Probability']=prob
+                timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                st.session_state.batch={'data':out,'filename':file.name,'timestamp':timestamp,'model':selected.name,'threshold':threshold if prob is not None else None}
+                st.session_state.reviews={}
+                st.session_state.history.append({'Timestamp':timestamp,'File':file.name,'Model':selected.name,'Threshold':threshold if prob is not None else 'Model default','Total':len(out),'Flagged':int((pred==1).sum())})
+                st.success('Analysis complete. Results are ready below and in the investigation queue.')
+        except Exception as exc: st.error(f'Unable to analyze this file: {exc}')
+    if st.session_state.batch is not None:
+        df=batch_view(); st.markdown('<div class="section-label">Latest batch results</div>',unsafe_allow_html=True); summary(df)
+        t1,t2,t3=st.tabs(['Risk overview','All transactions','Model evaluation'])
+        with t1:
+            a,b=st.columns(2)
+            with a:
+                counts=df.Prediction.value_counts().reindex(['Legitimate','Fraud'],fill_value=0)
+                fig=px.pie(names=counts.index,values=counts.values,hole=.68,color=counts.index,color_discrete_map={'Legitimate':'#15a58a','Fraud':'#dc5a55'})
+                fig.update_layout(title='Prediction distribution',height=320,margin=dict(t=45,b=10,l=10,r=10),legend=dict(orientation='h',y=-.1)); st.plotly_chart(fig,use_container_width=True)
+            with b:
+                fig=px.histogram(df,x='Amount',color='Prediction',nbins=35,color_discrete_map={'Legitimate':'#15a58a','Fraud':'#dc5a55'},barmode='overlay',opacity=.75)
+                fig.update_layout(title='Transaction amounts',height=320,margin=dict(t=45,b=10,l=10,r=10),legend=dict(orientation='h',y=-.2)); st.plotly_chart(fig,use_container_width=True)
+        with t2:
+            st.dataframe(df,hide_index=True,use_container_width=True)
+            st.download_button('Download full results',df.to_csv(index=False).encode('utf-8'),'predictions_full.csv','text/csv')
+        with t3: render_evaluation(df)
 
-        if SHAP_AVAILABLE and hasattr(model, "predict_proba"):
-            try:
-                explainer = shap.TreeExplainer(model)
-                shap_values = explainer.shap_values(X_single)
-                sv = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
-                contrib = pd.Series(np.ravel(sv), index=REQUIRED_COLUMNS).sort_values(key=abs, ascending=False).head(10)
-                st.markdown("##### Why this prediction?")
-                st.caption("Top features pushing this specific transaction toward or away from Fraud.")
-                fig = px.bar(x=contrib.values, y=contrib.index, orientation="h",
-                            labels={"x": "SHAP value (impact on fraud score)", "y": "Feature"},
-                            color=contrib.values, color_continuous_scale=[COLORS["legit"], COLORS["fraud"]])
-                fig.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
-                st.plotly_chart(style_fig(fig, legend=False), use_container_width=True)
-            except Exception:
-                st.caption("Per-transaction explanation unavailable for this model type.")
-        elif hasattr(model, "feature_importances_"):
-            st.caption("Install the `shap` package for a per-transaction explanation. Showing overall top features instead.")
-            top_imp = pd.Series(model.feature_importances_, index=REQUIRED_COLUMNS).sort_values(ascending=False).head(10)
-            st.bar_chart(top_imp)
-
-# ============================================================
-# PAGE: PREDICTION HISTORY
-# ============================================================
-elif page == "🕒 Prediction History":
-    st.markdown('<span class="section-pill">Session Log</span>', unsafe_allow_html=True)
-    st.title("🕒 Prediction History")
-    st.caption("Batch predictions you've run this session. Cleared when the app restarts.")
-
-    if not st.session_state.history:
-        st.info("No batch predictions yet — run one from **Upload & Predict** and it'll show up here.")
+elif page=='Investigation queue':
+    heading('Operations / Investigations','Investigation queue','Prioritize flagged transactions and record a review decision for this session.')
+    if st.session_state.batch is None: st.info('Run a batch analysis to populate the queue.')
     else:
-        hist_df = pd.DataFrame(st.session_state.history)
-        st.dataframe(hist_df, use_container_width=True)
-        fig = px.line(hist_df, x="Timestamp", y="Fraud", markers=True)
-        fig.update_traces(line_color=COLORS["accent"])
-        st.plotly_chart(style_fig(fig, "Fraud Count Across Runs This Session", legend=False), use_container_width=True)
-        if st.button("Clear History"):
-            st.session_state.history = []
-            st.rerun()
+        df=batch_view(); a,b,c=st.columns([1,1,1])
+        choice=a.selectbox('Prediction',['Fraud','All','Legitimate'],format_func=lambda s:{'Fraud':'Flagged','All':'All transactions','Legitimate':'Not flagged'}[s])
+        statuses=b.multiselect('Review status',['New','Under review','Confirmed fraud','Cleared'],default=['New','Under review','Confirmed fraud','Cleared'])
+        minimum=c.number_input('Minimum amount',value=float(df.Amount.min()),max_value=float(df.Amount.max()))
+        view=df[(df.Review_Status.isin(statuses)) & (df.Amount>=minimum)]
+        if choice!='All': view=view[view.Prediction==choice]
+        if 'Fraud_Probability' in view: view=view.sort_values('Fraud_Probability',ascending=False)
+        st.caption(f'{len(view):,} matching transactions · IDs identify rows in the latest batch')
+        st.dataframe(view[[c for c in ['Case_ID','Time','Amount','Prediction','Fraud_Probability','Review_Status'] if c in view]],hide_index=True,use_container_width=True)
+        if not view.empty:
+            case=st.selectbox('Select a case to inspect',view.Case_ID.tolist(),format_func=lambda i:f'Case #{i:05d}')
+            row=df.loc[df.Case_ID==case].iloc[0]
+            st.markdown(f'<div class="detail"><span class="flag {"" if row.Prediction=="Fraud" else "clear"}">{"FLAGGED FOR REVIEW" if row.Prediction=="Fraud" else "NOT FLAGGED"}</span><div class="title" style="margin-top:12px">Case #{case:05d}</div><div class="sub">Review the model signal alongside the transaction information.</div></div>',unsafe_allow_html=True)
+            a,b,c=st.columns(3); a.metric('Amount',f"{row.Amount:,.2f}"); b.metric('Model fraud score',f"{row.Fraud_Probability:.2%}" if 'Fraud_Probability' in row else 'Unavailable'); c.metric('Current status',row.Review_Status)
+            options=['New','Under review','Confirmed fraud','Cleared']
+            status=st.selectbox('Set review status',options,index=options.index(row.Review_Status),key=f'review_{st.session_state.batch["timestamp"]}_{case}')
+            if st.button('Save review',type='primary'): st.session_state.reviews[int(case)]=status; st.rerun()
+            with st.expander('Transaction details'): st.dataframe(row.to_frame('Value'),use_container_width=True)
+        st.download_button('Download filtered results',view.to_csv(index=False).encode('utf-8'),'predictions_filtered.csv','text/csv')
+        st.download_button('Download flagged transactions',df[df.Prediction=='Fraud'].to_csv(index=False).encode('utf-8'),'predictions_fraud_only.csv','text/csv')
 
-# ============================================================
-# PAGE: MODEL INFO
-# ============================================================
-elif page == "🧠 Model Info":
-    st.markdown('<span class="section-pill">Under the hood</span>', unsafe_allow_html=True)
-    st.title("🧠 Model Information")
-    st.caption("Details about the machine learning model powering this fraud detection system.")
+elif page=='Single transaction':
+    heading('Scoring / Manual entry','Single transaction','Inspect a transaction using the model’s required input features.')
+    threshold=st.slider('Fraud decision threshold',0.0,1.0,0.5,0.01,key='single_threshold',disabled=model is not None and not hasattr(model,'predict_proba'))
+    with st.form('single_form'):
+        a,b=st.columns(2); values={'Time':a.number_input('Time',value=0.0),'Amount':b.number_input('Amount',min_value=0.0,value=0.0)}
+        st.caption('V1–V28 are transformed dataset features. Enter the values supplied to the model.')
+        with st.expander('Enter V1–V28',expanded=True):
+            cols=st.columns(4)
+            for i in range(1,29): values[f'V{i}']=cols[(i-1)%4].number_input(f'V{i}',value=0.0,format='%.6f')
+        submitted=st.form_submit_button('Analyze transaction',type='primary',disabled=model is None)
+    if submitted:
+        try:
+            x=pd.DataFrame([values])[REQUIRED_COLUMNS]; pred,prob=predict(model,x,threshold)
+            st.session_state.single={'x':x,'pred':int(pred[0]),'prob':None if prob is None else float(prob[0]),'model':str(selected),'threshold':threshold}
+        except Exception as exc: st.error(f'Prediction failed: {exc}')
+    result=st.session_state.single
+    if result:
+        st.markdown('<div class="section-label">Analysis result</div>',unsafe_allow_html=True)
+        if result['pred']: st.error('Flagged for review')
+        else: st.success('Not flagged at the selected threshold')
+        a,b=st.columns(2); a.metric('Model fraud score',f"{result['prob']:.2%}" if result['prob'] is not None else 'Unavailable'); b.metric('Decision threshold',f"{result['threshold']:.0%}" if result['prob'] is not None else 'Model default')
+        st.caption('The model score is a prediction, not a confirmed fraud outcome.')
+        if model is not None and result['model']==str(selected): render_explanation(model,result['x'])
 
-    i1, i2 = st.columns(2)
-    i1.markdown(f"""<div class="feature-card"><h4>📋 Model Details</h4>
-        <p><b>Algorithm:</b> {MODEL_INFO['algorithm']}</p>
-        <p><b>Training Dataset:</b> {MODEL_INFO['dataset']}</p>
-        <p><b>Training Samples:</b> {MODEL_INFO['training_samples']}</p>
-        <p><b>Active Model File:</b> {selected_model_path}</p></div>""", unsafe_allow_html=True)
-    i2.markdown("""<div class="feature-card"><h4>🎯 Why These Metrics</h4>
-        <p>Fraud datasets are highly imbalanced, so accuracy alone can be misleading.
-        Precision, recall, and F1-score give a fuller picture of how well the model
-        catches fraud without over-flagging legitimate transactions.</p></div>""", unsafe_allow_html=True)
-
-    st.markdown("#### Performance Metrics")
-    perf_defs = [
-        ("Accuracy", "accuracy", "accent"), ("Precision", "precision", "legit"),
-        ("Recall", "recall", "legit"), ("F1-Score", "f1_score", "accent"),
-    ]
-    for i, (col, (label, key, variant)) in enumerate(zip(st.columns(4), perf_defs)):
-        with col:
-            metric_card(label, f"{MODEL_INFO[key] * 100:.2f}%", variant, delay=i * 0.08)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    fig = px.bar(x=["Accuracy", "Precision", "Recall", "F1-Score"],
-                y=[MODEL_INFO[k] for k in ["accuracy", "precision", "recall", "f1_score"]],
-                labels={"x": "Metric", "y": "Score"}, range_y=[0, 1],
-                color=["Accuracy", "Precision", "Recall", "F1-Score"],
-                color_discrete_sequence=[COLORS["accent"], COLORS["legit"], COLORS["legit"], COLORS["accent"]],
-                text=[f"{MODEL_INFO[k]*100:.1f}%" for k in ["accuracy", "precision", "recall", "f1_score"]])
-    fig.update_traces(marker_line_width=0, textposition="outside")
-    st.plotly_chart(style_fig(fig, "Model Performance Overview", legend=False), use_container_width=True)
-
-    st.info("⚠️ These values are placeholders — update `MODEL_INFO` at the top of the script with your "
-            "model's real evaluation results. You can also upload a CSV with a ground-truth label column "
-            "on the Upload & Predict page to compute live evaluation metrics.")
-
-# ============================================================
-# PAGE: ABOUT
-# ============================================================
-elif page == "ℹ️ About":
-    st.markdown('<span class="section-pill">Project details</span>', unsafe_allow_html=True)
-    st.title("ℹ️ About This Project")
-    st.markdown("""
-### Project Overview
-This is a machine learning based system designed to detect fraudulent financial transactions.
-It analyzes transaction-level features and classifies each transaction as **Legitimate** or
-**Fraudulent**, along with a fraud probability score.
-
-### Workflow
-1. **Data Collection** — Transaction data sourced from a financial dataset.
-2. **Preprocessing** — Cleaning, handling missing values, and addressing class imbalance.
-3. **Feature Engineering** — Preparing and selecting relevant features for model training.
-4. **Model Training** — Training and comparing algorithms such as Random Forest, XGBoost, and Neural Networks.
-5. **Evaluation** — Assessing performance using accuracy, precision, recall, and F1-score.
-6. **Deployment** — Serving the trained model through this interactive Streamlit application.
-
-### Why This Matters
-Fraudulent transactions are rare but costly. A good fraud detection system needs to catch as
-many fraud cases as possible (**recall**) while minimizing false alarms on legitimate transactions
-(**precision**). The adjustable threshold on the prediction page lets you explore that trade-off directly.
-
-### Tech Stack
-- **Python** — core language · **Streamlit** — web app framework
-- **scikit-learn / XGBoost** — model training · **Plotly** — interactive visualizations
-- **Pandas / NumPy** — data handling · **SHAP** *(optional)* — per-transaction explainability
-
-### Note on dataset compatibility
-This app expects `Time`, `V1`–`V28`, and `Amount` columns (the Kaggle Credit Card Fraud dataset
-format). If your trained model instead uses the PaySim dataset's raw columns (`step`, `type`,
-`amount`, `oldbalanceOrg`, etc.), update `REQUIRED_COLUMNS` and the single-transaction form accordingly.
-""")
-
-# ============================================================
-# FOOTER (all pages)
-# ============================================================
-footer()
+elif page=='Run history':
+    heading('Workspace / Activity','Run history','Review batch scoring activity from this browser session.')
+    if st.session_state.history:
+        st.dataframe(pd.DataFrame(st.session_state.history),hide_index=True,use_container_width=True)
+        if st.button('Clear history'): st.session_state.history=[]; st.rerun()
+    else: st.markdown('<div class="empty"><strong>No scoring runs yet</strong>Completed batch analyses will appear here.</div>',unsafe_allow_html=True)
+else:
+    heading('System / Model','Model information','Understand the selected estimator and the signals it uses.')
+    if model is None: st.info('Place your model file next to this app to load it.')
+    else:
+        a,b,c=st.columns(3); a.metric('Estimator',type(model).__name__); b.metric('Model file',selected.name); c.metric('Probability scoring','Available' if hasattr(model,'predict_proba') else 'Unavailable')
+        st.caption('Evaluation metrics are calculated from a batch containing verified 0/1 labels; no placeholder metrics are presented as model performance.')
+        render_importance(model,REQUIRED_COLUMNS)
